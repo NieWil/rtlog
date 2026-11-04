@@ -5,6 +5,7 @@
 - Faster log call: frames are encoded in place in the ring (82 instructions per W1 call on x86-64, down from 198); on bare metal one shared push keeps per-call-site code at about 56 bytes.
 - Crash log: `rtlog::crash::install` / `rtlog_crash_install` dump every undrained record plus a `CRASH` record on panic, `SIGSEGV`, `SIGFPE`, `SIGBUS`, `SIGILL` and `SIGABRT`; `snapshot()` dumps on demand. New `crash` and `ctx_time` frames.
 - Stdout mode: `rtlog_decode::stdout::init()` prints decoded text as the program runs, level from `RTLOG`.
+- CI runs once per commit: pull requests on `pull_request` only, `main` on `push`; a new push cancels the run it replaces. The release dry run on pull requests only runs when a manifest or the release workflow changes.
 - `scripts/spec_check.py` and the `rtlog-spec-check` skill enforce the spec's real-time, wire, usability, cycle and size rules in CI.
 - Specification v0.2.
 
