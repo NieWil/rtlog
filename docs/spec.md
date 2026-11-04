@@ -2,7 +2,7 @@
 
 Nov 2, 2026 · @Niels
 
-v0.2 (Nov 4, 2026) aligns the spec with the v0.1 implementation: the API that exists, how site IDs and contracts are produced, the frame layout, the crash log and the stdout mode, and budgets in cycles and bytes that CI enforces (`scripts/spec_check.py`). What remains planned is marked as such; [implementation notes](implementation.md) track the details.
+v0.2 (Nov 4, 2026) aligns the spec with the implementation released as v0.2.0: the API that exists, how site IDs and contracts are produced, the frame layout, the crash log and the stdout mode, and budgets in cycles and bytes that CI enforces (`scripts/spec_check.py`). What remains planned is marked as such; [implementation notes](implementation.md) track the details.
 
 ## 0. Developer experience and API
 

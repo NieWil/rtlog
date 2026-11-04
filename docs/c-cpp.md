@@ -68,7 +68,7 @@ Supported argument types: `bool`, `char`, all integer types, `float`, `double`, 
 - A call site's descriptor (level, format string, file, line) goes into the `rtlog_sites` ELF section. The ID written on the wire is the descriptor's index in that section, so the log path does no hashing and never reads a string.
 - `rtlog contract --elf` reads the section on the host, applying load-time relocations for position-independent executables.
 
-## Limits in v0.1
+## Limits in v0.2
 
 - GCC or Clang on an ELF target: Linux, Zephyr, bare metal. Not MSVC, macOS or Windows.
 - Little-endian only.

@@ -7,7 +7,7 @@ You write `println!`-style log lines. The device writes a few binary bytes into 
 [![ci](https://github.com/NieWil/rtlog/actions/workflows/ci.yml/badge.svg)](https://github.com/NieWil/rtlog/actions/workflows/ci.yml)
 ![no_std](https://img.shields.io/badge/no__std-yes-2ea44f)
 ![languages](https://img.shields.io/badge/Rust%20%C2%B7%20C%20%C2%B7%20C%2B%2B%20%C2%B7%20Zephyr-informational)
-![status](https://img.shields.io/badge/status-v0.1%20preview-orange)
+![status](https://img.shields.io/badge/status-v0.2%20preview-orange)
 ![licence](https://img.shields.io/badge/licence-MIT%20%2F%20Apache--2.0-blue)
 
 ![What you write, what goes on the wire, what you read](docs/images/hero.svg)
@@ -66,7 +66,7 @@ Each call site gets an ID at build time; its format string goes into a contract 
 | [Zephyr](docs/zephyr.md) | Module, Kconfig, transports |
 | [Performance and size](docs/performance.md) | Cycles per call, flash and RAM, measuring on your board |
 | [Demo on your device](docs/demo.md) | Prebuilt per architecture: copy to a board, run one script, open the trace on your computer |
-| [Specification](docs/spec.md) · [Implementation notes](docs/implementation.md) | The full design, and where v0.1 stands |
+| [Specification](docs/spec.md) · [Implementation notes](docs/implementation.md) | The full design, and where v0.2 stands |
 
 ## Get it
 
@@ -77,7 +77,7 @@ Each call site gets an ID at build time; its format string goes into a contract 
 
 ## Status
 
-v0.1 preview. Every CI run tests it on Linux, macOS, Windows, and on arm64, ARMv7, RISC-V and x86 under QEMU. Each run also includes a 2-minute soak test, Miri, and Thread and Address sanitizers. Before 1.0: strip format strings from shipped binaries, reach the ≤ 50-cycle budget per call, and add `derive(Log)` and the `log` / `tracing` / `defmt` bridges.
+v0.2 preview. Every CI run tests it on Linux, macOS, Windows, and on arm64, ARMv7, RISC-V and x86 under QEMU. Each run also includes a 2-minute soak test, Miri, and Thread and Address sanitizers. Before 1.0: strip format strings from shipped binaries, reach the ≤ 50-cycle budget per call, and add `derive(Log)` and the `log` / `tracing` / `defmt` bridges.
 
 ## Licence
 

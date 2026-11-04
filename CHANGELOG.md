@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.2.0 — faster log call, crash log, stdout mode, device demo
 
 - Faster log call: frames are encoded in place in the ring (82 instructions per W1 call on x86-64, down from 198); on bare metal one shared push keeps per-call-site code at about 56 bytes.
 - Crash log: `rtlog::crash::install` / `rtlog_crash_install` dump every undrained record plus a `CRASH` record on panic, `SIGSEGV`, `SIGFPE`, `SIGBUS`, `SIGILL` and `SIGABRT`; `snapshot()` dumps on demand. New `crash` and `ctx_time` frames.

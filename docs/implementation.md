@@ -1,4 +1,4 @@
-# Implementation notes — v0.1
+# Implementation notes — v0.2
 
 This file tracks how the code in `crates/` matches [the specification](spec.md): what is built, where it deviates, and what is left.
 
@@ -26,7 +26,7 @@ This file tracks how the code in `crates/` matches [the specification](spec.md):
 ## Deviations from the spec
 
 1. **Argument types travel on the wire.** Each argument is one tag byte plus its value, and the contract records the argument count (`nargs`) instead of the type list. A `macro_rules!` macro cannot see argument types at expansion time, and a `static` cannot depend on them. The site ID therefore hashes module, file, line, column, format string, level and `nargs`. Cost: one byte per argument.
-2. **The contract comes from the binary's descriptors.** Sites are collected with `linkme` into a link section. `rtlog::contract::write(path)` writes the JSON-lines file at runtime (`std`), and `rtlog contract --elf <image>` reads the same descriptors from any ELF image, firmware included. Stripping them (`cargo rtlog verify`) is not built yet, so **format strings are still present in v0.1 binaries** and threat V2 is open.
+2. **The contract comes from the binary's descriptors.** Sites are collected with `linkme` into a link section. `rtlog::contract::write(path)` writes the JSON-lines file at runtime (`std`), and `rtlog contract --elf <image>` reads the same descriptors from any ELF image, firmware included. Stripping them (`cargo rtlog verify`) is not built yet, so **format strings are still present in v0.2 binaries** and threat V2 is open.
 3. **Not yet in the argument model:** `#[derive(Log)]`, `intern!`, `{:display}` / `{:debug}` (tier 4), and `#[rtlog(redact)]`.
 4. **Dynamic strings and byte slices are capped at 127 bytes.** The length byte uses bit 7 as the truncation flag, so the spec's `{:str<256>}` override cannot be encoded. Truncation keeps strings on a UTF-8 boundary.
 5. **Ring frames carry a 2-byte length prefix inside the ring** so the drain always hands whole frames to the transport. It never goes on the wire. Only `DropNewest` is implemented.
