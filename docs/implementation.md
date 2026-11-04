@@ -21,7 +21,7 @@ This file tracks how the code in `crates/` matches [the specification](spec.md):
 | 8b Debug stdout, crash log (Unix; C on POSIX) | Built: one numbered file per dump, rings read without waiting for the drain | `rtlog_decode::stdout`, `rtlog::crash`, `rtlog_crash_install` |
 | C / C++ producer, Zephyr module | Built (Zephyr not CI-built) | `c/include/rtlog.h`, `c/zephyr`, `zephyr/module.yml` |
 | 10c Benchmarks in cycles, size on Cortex-M4F | Built | `examples/timing.rs`, `size/mcu`, `scripts/size_report.py` |
-| 5 resync, compression, AEAD; 8b MCU crash capture; 10 `log` / `tracing` / `defmt` bridges and OTLP / CTF outputs; shared memory; contract stripping | Not yet | [Roadmap](roadmap.md) |
+| 5 compression, AEAD; 8b MCU crash capture; 10 `log` / `tracing` / `defmt` bridges and OTLP / CTF outputs; shared memory; contract stripping | Not yet | [Roadmap](roadmap.md) |
 
 ## Deviations from the spec
 
@@ -36,7 +36,7 @@ This file tracks how the code in `crates/` matches [the specification](spec.md):
 9. **On `no_std`, call sites name their producer:** `rtlog::info!(to: &mut producer, ...)`. On `std` the calling thread's ring is used implicitly.
 10. **Default `std` clock** is the CPU counter: invariant TSC (halved, so the rate fits the header's `u32`) on x86-64, `CNTVCT_EL0` on aarch64, otherwise `Instant`. `RTLOG_CLOCK=instant` forces `Instant`. The TSC rate is calibrated for 20 ms on the first drain.
 11. **Text output shows seconds since the first record** in the stream; JSON keeps absolute `ts_ns`.
-12. **The decoder stops at the first bad frame** and reports its byte offset, since there are no resync frames yet.
+12. **Resync is byte-based and per context.** The drain writes a resync frame every 64 KiB of frames (not also every second), followed by `ctx_register` and `ctx_time` frames, rather than one frame with a single timestamp. After a bad frame the decoder resumes at the next resync frame; with none after it, it stops at the bad frame and reports its byte offset. Times inside a gap are lost with its frames; after it they are exact. On `no_std` the application calls `drain::write_resync` itself.
 13. **Span frames carry a timestamp delta and context**, like log frames, followed by the spec's payload (span site ID, span ID, parent). Span names are span sites in the contract (`"kind":"span"`), not interned strings. Span IDs are the full 32-bit context plus a 32-bit per-context counter, so IDs stay unique in a process that creates many threads over its life. On `std` the parent is the thread's current span; with an explicit producer, `span_enter` / `span_exit` track it.
 14. **Registration does not block the drain.** A thread's first log call registers its ring through a separate pending list, and runtime counters are plain atomics. So a transport may log, call `stats()`, or start threads while the drain is inside `poll`. A regression test covers it.
 15. **Text output shows drops and spans** as `DROP` and `SPAN ▶ / ◀` lines, with span durations. Perfetto output turns numeric fields named in the format string (`err={}`) into counter tracks.

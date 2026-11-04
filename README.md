@@ -77,7 +77,7 @@ Each call site gets an ID at build time; its format string goes into a contract 
 
 ## Status
 
-v0.2 preview. Every CI run tests it on Linux, macOS, Windows, and on arm64, ARMv7, RISC-V and x86 under QEMU. Each run also includes a 2-minute soak test, Miri, and Thread and Address sanitizers. Not yet there: `derive(Log)`, the `log` / `tracing` / `defmt` bridges, per-module levels, resync on a lossy link, and stripping format strings from shipped binaries. [Roadmap →](docs/roadmap.md)
+v0.2 preview. Every CI run tests it on Linux, macOS, Windows, and on arm64, ARMv7, RISC-V and x86 under QEMU. Each run also includes a 2-minute soak test, Miri, and Thread and Address sanitizers. Not yet there: `derive(Log)`, the `log` / `tracing` / `defmt` bridges, per-module levels, and stripping format strings from shipped binaries. [Roadmap →](docs/roadmap.md)
 
 ## Licence
 

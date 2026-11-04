@@ -66,4 +66,4 @@ A W1 call (`info!("x={} y={}", u32, u32)`) is 18 bytes on the wire; the same lin
 
 - **Single producer, single consumer per ring.** There is no CAS and no spin. Producers never share a cache line with each other.
 - **Lossy, never blocking.** A full ring drops the new frame and counts it. The drain reports the count, so the host sees every loss.
-- **Untrusted input on the host.** The decoder bounds every length and allocation and stops cleanly at the first bad frame. A corruption sweep in CI checks this.
+- **Untrusted input on the host.** The decoder bounds every length and allocation; after a bad frame it resumes at the next resync frame (or, with none, stops cleanly there). A corruption sweep in CI checks this.

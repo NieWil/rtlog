@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+Fixes from an independent review of v0.2.1, and the decoder resync that was the top open item.
+
+- **Decoder resync.** The drain (Rust `std` and C) writes a resync frame every 64 KiB; after a bad frame the decoder skips to the next one instead of ending, so one corrupted byte on a UART or UDP link costs a stretch of frames, not the capture. The output shows a `GAP` line, a `gap` JSON record and a Perfetto marker; `Decoded::gaps` and `skipped_bytes` count them. Each resync is followed by every context's name and exact clock, so times after a gap are exact. `Decoder::recovering(false)` restores stop-at-first-error. On `no_std`, call `drain::write_resync`.
+- **C: a stale slot could be written by two threads.** The pthread destructor now clears the thread's own pointer; before, a later destructor that logged could write into a slot the drain had freed and given to a new thread. A failed `pthread_key_create` no longer clobbers another library's key 0.
+- **Crash dump scan** loaded `head` before `tail`, so a running drain could leave `tail` past `head` and the dump walked bogus lengths. Now `tail` first, frames shorter than the smallest real one are rejected, and a fence orders the data reads before the re-check (Rust and C).
+- **Crash files are never overwritten**: `O_EXCL`, pid read at dump time (containers that reuse pid 1, forked children). Panics and snapshots stop after 16 files per process so a service that catches a panic per request cannot fill the disk; fatal signals are always dumped.
+- **Two threads faulting at once** no longer cut the first dump short: `SA_RESETHAND` made the kernel kill the second thread on the spot; the handler now restores the default action itself, and the second thread waits for the first dump (Rust and C).
+- A panic or snapshot dump no longer holds the ring-list lock while writing to disk, so threads starting or exiting are not stalled by a slow disk.
+- **Rings kept without a drain**: the most recently *finished* threads are kept (it was the oldest registered), and the bound applies again if a drain is dropped.
+- Stdout mode: a drop report arriving first no longer made every later timestamp print as absolute ticks.
+- C++: `{x}` in a format string is a `static_assert`, as in Rust. `scripts/spec_check.py` compares the resync frame ID across Rust, C and the decoder.
+
 ## v0.2.1 — hardening after the v0.2.0 review
 
 Fixes from the v0.2.0 review ([PR #9](https://github.com/NieWil/rtlog/pull/9)). **API change:** `rtlog::crash::install` and `rtlog_crash_install` take a directory, not a file, and write `crash-<pid>-<n>.rtlog` in it.

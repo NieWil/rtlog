@@ -86,6 +86,32 @@ pub fn write_header(t: &mut impl Transport) -> Result<(), Full> {
     t.write(&Header::new(crate::site::contract_hash(), crate::clock::hz()).encode())
 }
 
+/// Write a `resync` control frame: the control ID and a copy of the stream
+/// header, in one write. Emit one about every [`wire::RESYNC_EVERY`] bytes (the
+/// `std` drain does); a decoder that hit a bad frame skips to the next one.
+/// Follow it with [`write_ctx_register`] and [`write_ctx_time`] per context so
+/// names and clocks are exact after a gap.
+pub fn write_resync(t: &mut impl Transport) -> Result<(), Full> {
+    let mut b = [0u8; 4 + wire::HEADER_LEN];
+    b[..4].copy_from_slice(&wire::CTRL_RESYNC.to_le_bytes());
+    b[4..].copy_from_slice(&Header::new(crate::site::contract_hash(), crate::clock::hz()).encode());
+    t.write(&b)
+}
+
+/// Write a `ctx_time` control frame: context `ctx`'s clock, in ticks.
+pub fn write_ctx_time(t: &mut impl Transport, ctx: u32, ticks: u64) -> Result<(), Full> {
+    control(t, wire::CTRL_CTX_TIME, ctx, &ticks.to_le_bytes())
+}
+
+/// Ticks a forwarded frame advances its context's clock by: the timestamp delta
+/// after the 4-byte site ID. Every frame in a ring is timed.
+pub fn frame_delta(frame: &[u8]) -> u64 {
+    frame
+        .get(4..)
+        .and_then(varint::decode)
+        .map_or(0, |(d, _)| d)
+}
+
 fn control(t: &mut impl Transport, id: u32, ctx: u32, tail: &[u8]) -> Result<(), Full> {
     let mut b = [0u8; 4 + 5 + 1 + crate::arg::DYN_CAP];
     b[..4].copy_from_slice(&id.to_le_bytes());
@@ -199,6 +225,29 @@ mod tests {
         let before = ring.drops();
         assert_eq!(drain_ring(&mut c, &mut t, &mut scratch).dropped_reported, 0);
         assert_eq!(ring.drops(), before);
+    }
+
+    // Reads the link-section site table for the contract hash, which Miri cannot.
+    #[cfg_attr(miri, ignore)]
+    #[test]
+    fn resync_frame_starts_with_the_marker_and_holds_the_header() {
+        let mut buf = [0u8; 64];
+        let mut t = SliceTransport::new(&mut buf);
+        write_resync(&mut t).unwrap();
+        let w = t.written();
+        assert_eq!(w.len(), 4 + wire::HEADER_LEN);
+        assert_eq!(&w[..8], &wire::RESYNC_MARKER);
+        assert!(Header::decode(&w[4..]).is_some());
+    }
+
+    #[test]
+    fn frame_delta_reads_the_timestamp() {
+        let mut f = [0u8; 8];
+        f[..4].copy_from_slice(&7u32.to_le_bytes());
+        f[4] = 0x85; // 133 = 0x85 0x01
+        f[5] = 0x01;
+        assert_eq!(frame_delta(&f), 133);
+        assert_eq!(frame_delta(&f[..3]), 0);
     }
 
     #[test]

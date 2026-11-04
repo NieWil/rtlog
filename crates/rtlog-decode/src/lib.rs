@@ -87,6 +87,14 @@ pub(crate) enum Item<'c> {
         ctx: u32,
         crash: Crash,
     },
+    /// A stretch of the stream that could not be decoded: it starts at byte
+    /// `offset`; decoding went on `skipped` bytes later, at the next resync frame.
+    Gap {
+        ts_ns: u64,
+        offset: usize,
+        reason: String,
+        skipped: usize,
+    },
 }
 
 impl Item<'_> {
@@ -96,6 +104,7 @@ impl Item<'_> {
             Item::SpanOpen { ts_ns, .. }
             | Item::SpanClose { ts_ns, .. }
             | Item::Dropped { ts_ns, .. }
+            | Item::Gap { ts_ns, .. }
             | Item::Crash { ts_ns, .. } => *ts_ns,
         }
     }
@@ -111,8 +120,14 @@ pub struct Decoded {
     pub spans: usize,
     pub dropped: u64,
     pub contexts: usize,
-    /// Set when decoding stopped early; the output holds what came before.
+    /// Set when decoding stopped early (a bad frame with no resync frame after
+    /// it); the output holds what came before.
     pub error: Option<DecodeError>,
+    /// Bad stretches skipped by resuming at a resync frame. Each is a `GAP` line
+    /// in the text output and a `gap` record in JSON.
+    pub gaps: usize,
+    /// Bytes of the stream skipped in those gaps.
+    pub skipped_bytes: usize,
     /// The crash record, when the stream is a crash dump.
     pub crash: Option<Crash>,
 }
@@ -192,16 +207,32 @@ impl TextRenderer {
     }
 
     fn prefix(&mut self, ts_ns: u64, ctx: u32) -> String {
-        let t0 = *self.t0.get_or_insert(ts_ns);
+        self.prefix_with(ts_ns, ctx, true)
+    }
+
+    /// `anchor`: whether this item may set the time shown as zero. A drop
+    /// report carries no time of its own, so it must not: if it arrived first
+    /// every later line would print absolute ticks.
+    fn prefix_with(&mut self, ts_ns: u64, ctx: u32, anchor: bool) -> String {
         let name = self
             .names
             .get(&ctx)
             .cloned()
             .unwrap_or_else(|| format!("ctx{ctx}"));
+        self.labelled(ts_ns, &name, anchor)
+    }
+
+    /// `<seconds> [<label>]`; see [`Self::prefix_with`] for `anchor`.
+    fn labelled(&mut self, ts_ns: u64, label: &str, anchor: bool) -> String {
+        let t0 = match self.t0 {
+            Some(t) => t,
+            None if anchor => *self.t0.get_or_insert(ts_ns),
+            None => ts_ns,
+        };
         format!(
             "{} {}",
             self.paint.paint(DIM, &stamp(ts_ns, t0)),
-            self.paint.paint(CYAN, &format!("[{name}]"))
+            self.paint.paint(CYAN, &format!("[{label}]"))
         )
     }
 
@@ -258,9 +289,23 @@ impl TextRenderer {
                     p.paint(DIM, &human_ns(ts_ns.saturating_sub(start))),
                 )
             }
+            Item::Gap {
+                ts_ns,
+                offset,
+                reason,
+                skipped,
+            } => format!(
+                "{} {} {}",
+                self.labelled(*ts_ns, "stream", false),
+                p.paint(RED_BOLD, "GAP  "),
+                p.paint(
+                    RED_BOLD,
+                    &format!("bad data at byte {offset} ({reason}); {skipped} bytes skipped, resumed at the next resync frame")
+                ),
+            ),
             Item::Dropped { ts_ns, ctx, count } => format!(
                 "{} {} {}",
-                self.prefix(*ts_ns, *ctx),
+                self.prefix_with(*ts_ns, *ctx, false),
                 p.paint(RED_BOLD, "DROP "),
                 p.paint(RED_BOLD, &format!("{count} frames dropped")),
             ),
@@ -308,7 +353,16 @@ pub fn decode_with(
     let mut last_ts: HashMap<u32, u64> = HashMap::new();
     let mut items = Vec::new();
     let mut result = Decoded::default();
-    for ev in dec.by_ref() {
+    // Latest time seen on any context: where a gap is placed on the timeline.
+    let mut now_ns = 0u64;
+    while let Some(ev) = dec.next() {
+        match &ev {
+            Ok(Event::Record(r)) => now_ns = now_ns.max(r.ts_ns),
+            Ok(Event::SpanOpen { ts_ns, .. } | Event::SpanClose { ts_ns, .. }) => {
+                now_ns = now_ns.max(*ts_ns)
+            }
+            _ => {}
+        }
         match ev {
             Ok(Event::Record(r)) => {
                 last_ts.insert(r.ctx, r.ts_ns);
@@ -346,10 +400,30 @@ pub fn decode_with(
                 result.crash = Some(crash.clone());
                 items.push(Item::Crash { ts_ns, ctx, crash });
             }
-            Ok(Event::CtxClose { .. } | Event::CtxTime { .. }) => {}
-            Err(e) => result.error = Some(e),
+            Ok(Event::CtxClose { .. } | Event::CtxTime { .. } | Event::Resync) => {}
+            Err(e) => match dec.last_skip {
+                // Resumes at the next resync frame: note the gap and go on.
+                Some(skipped) => {
+                    let (offset, reason) = match &e {
+                        DecodeError::BadFrame { offset, reason } => (*offset, reason.clone()),
+                        DecodeError::UnknownSite { offset, id } => {
+                            (*offset, format!("unknown site {id:#010x}"))
+                        }
+                        other => (0, other.to_string()),
+                    };
+                    result.gaps += 1;
+                    items.push(Item::Gap {
+                        ts_ns: now_ns,
+                        offset,
+                        reason,
+                        skipped,
+                    });
+                }
+                None => result.error = Some(e),
+            },
         }
     }
+    result.skipped_bytes = dec.skipped_bytes;
     items.sort_by_key(Item::ts);
     result.records = items
         .iter()
@@ -363,7 +437,7 @@ pub fn decode_with(
     // Drop reports carry no timestamp of their own; never let them set t0.
     let t0 = items
         .iter()
-        .filter(|i| !matches!(i, Item::Dropped { .. }))
+        .filter(|i| !matches!(i, Item::Dropped { .. } | Item::Gap { .. }))
         .map(Item::ts)
         .min()
         .unwrap_or(0);
@@ -420,6 +494,17 @@ pub fn decode_with(
                         });
                         writeln!(result.text, "{line}").unwrap();
                     }
+                    Item::Gap {
+                        ts_ns,
+                        offset,
+                        reason,
+                        skipped,
+                    } => {
+                        let line = serde_json::json!({
+                            "type": "gap", "ts_ns": ts_ns, "offset": offset, "reason": reason, "skipped": skipped,
+                        });
+                        writeln!(result.text, "{line}").unwrap();
+                    }
                     Item::Crash { ts_ns, ctx, crash } => {
                         let line = serde_json::json!({
                             "type": "crash", "ts_ns": ts_ns, "ctx": ctx, "ctx_name": name_of(*ctx),
@@ -449,6 +534,41 @@ pub fn decode_with(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A drop report has no time of its own. If one is the first thing a live
+    /// stream shows, the lines after it must still count from their own first
+    /// event, not from tick 0 (which printed absolute ticks).
+    #[test]
+    fn a_drop_report_first_does_not_set_the_time_origin() {
+        let mut r = TextRenderer::new(false, true, false, None);
+        let dropped = r
+            .render(&Item::Dropped {
+                ts_ns: 0,
+                ctx: 3,
+                count: 2,
+            })
+            .unwrap();
+        assert!(dropped.starts_with("0.000000 "), "{dropped}");
+        let crash = Crash {
+            kind: 3,
+            signal: 0,
+            code: 0,
+            addr: 0,
+            pc: 0,
+            message: "x".into(),
+        };
+        let line = r
+            .render(&Item::Crash {
+                ts_ns: 5_000_000_000,
+                ctx: 3,
+                crash,
+            })
+            .unwrap();
+        assert!(
+            line.starts_with("0.000000 "),
+            "first real event is time zero: {line}"
+        );
+    }
 
     #[test]
     fn human_durations() {

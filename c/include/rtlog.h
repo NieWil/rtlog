@@ -252,9 +252,17 @@ constexpr unsigned count_placeholders(const char *s, unsigned n = 0) {
          : s[0] == '{' ? count_placeholders(s + 1, n + 1)
          : count_placeholders(s + 1, n);
 }
+/* `{x}` (an inline capture) is not supported: the format string is a plain literal. */
+constexpr bool has_inline_capture(const char *s) {
+    return *s == 0 ? false
+         : (s[0] == '{' && s[1] == '{') ? has_inline_capture(s + 2)
+         : (s[0] == '{' && (s[1] == '_' || (s[1] >= 'a' && s[1] <= 'z') || (s[1] >= 'A' && s[1] <= 'Z'))) ? true
+         : has_inline_capture(s + 1);
+}
 } // namespace rtlog_detail
 #define RTLOG__ARG(w, x) rtlog_detail::put(w, x);
 #define RTLOG__CHECK(fmt, n) \
+    static_assert(!rtlog_detail::has_inline_capture(fmt), "rtlog: inline captures like {x} are not supported; write \"x={}\", x"); \
     static_assert(rtlog_detail::count_placeholders(fmt) == (n), "rtlog: placeholder count does not match arguments");
 
 namespace rtlog {
@@ -340,6 +348,10 @@ static uint64_t rtlog__no_clock(void) { return 0; }
 #define RTLOG__DEFAULT_HZ 1u
 #endif
 
+#define RTLOG__CTRL_RESYNC 0xFFFFFF00u
+#define RTLOG__CTRL_CTX_TIME 0xFFFFFF09u
+/* Frame bytes between two resync frames (the decoder skips to the next one after a bad frame). */
+#define RTLOG__RESYNC_EVERY 65536u
 #define RTLOG__CTRL_DROPPED 0xFFFFFF01u
 #define RTLOG__CTRL_CTX_REGISTER 0xFFFFFF02u
 #define RTLOG__CTRL_CTX_CLOSE 0xFFFFFF03u
@@ -355,6 +367,8 @@ struct rtlog__ring {
     uint32_t state;     /* atomic */
     uint32_t ctx;
     uint32_t announced; /* atomic; cleared to re-announce a rename */
+    uint64_t drain_ticks; /* drain only: sum of the timestamp deltas forwarded so far */
+    uint32_t sync_pending; /* drain only: a resync was written, this ring's ctx_time has not followed */
     uint64_t last_ts;   /* producer only */
     uint64_t span_seq;  /* producer only */
     uint64_t current_span;
@@ -374,6 +388,7 @@ static uint32_t rtlog__hz = RTLOG__DEFAULT_HZ;
 static uint32_t rtlog__next_ctx = 1;
 static uint32_t rtlog__busy;
 static uint32_t rtlog__header_sent;
+static uint32_t rtlog__since_sync;
 static uint32_t rtlog__total_drops;
 /* Calls from threads that found no free ring slot: reported on context 0. */
 static uint32_t rtlog__unclaimed_drops;
@@ -409,13 +424,18 @@ static void rtlog__set_name(struct rtlog__ring *r, const char *name) {
 #include <pthread.h>
 #define RTLOG__PTHREAD 1
 static pthread_key_t rtlog__key;
+static int rtlog__key_ok;
 static pthread_once_t rtlog__key_once = PTHREAD_ONCE_INIT;
 /* Runs when a thread that logged exits: its slot is closed and the next drain
- * pass frees it, so a thread pool never runs out of slots. */
+ * pass frees it, so a thread pool never runs out of slots. The thread's own
+ * pointer is cleared too: another TLS destructor that logs afterwards must
+ * claim a fresh slot, not write into one the drain may already have freed and
+ * given to a new thread. */
 static void rtlog__key_dtor(void *p) {
+    rtlog__mine = 0;
     __atomic_store_n(&((struct rtlog__ring *)p)->state, RTLOG__CLOSED, __ATOMIC_RELEASE);
 }
-static void rtlog__key_make(void) { pthread_key_create(&rtlog__key, rtlog__key_dtor); }
+static void rtlog__key_make(void) { rtlog__key_ok = pthread_key_create(&rtlog__key, rtlog__key_dtor) == 0; }
 #endif
 
 static struct rtlog__ring *rtlog__claim(void) {
@@ -427,6 +447,8 @@ static struct rtlog__ring *rtlog__claim(void) {
                                         __ATOMIC_RELAXED)) {
             r->ctx = __atomic_fetch_add(&rtlog__next_ctx, 1, __ATOMIC_RELAXED);
             r->last_ts = 0;
+            r->drain_ticks = 0;
+            r->sync_pending = 0;
             r->span_seq = 0;
             r->current_span = 0;
             char name[24] = "thread-";
@@ -445,7 +467,7 @@ static struct rtlog__ring *rtlog__claim(void) {
             rtlog__mine = r;
 #ifdef RTLOG__PTHREAD
             pthread_once(&rtlog__key_once, rtlog__key_make);
-            pthread_setspecific(rtlog__key, r);
+            if (rtlog__key_ok) pthread_setspecific(rtlog__key, r);
 #endif
             return r;
         }
@@ -465,7 +487,7 @@ void rtlog_thread_exit(void) {
         __atomic_store_n(&rtlog__mine->state, RTLOG__CLOSED, __ATOMIC_RELEASE);
         rtlog__mine = 0;
 #ifdef RTLOG__PTHREAD
-        pthread_setspecific(rtlog__key, 0);
+        if (rtlog__key_ok) pthread_setspecific(rtlog__key, 0);
 #endif
     }
 }
@@ -596,10 +618,28 @@ size_t rtlog_drain(rtlog_write_fn wr, void *user) {
         __atomic_fetch_add(&rtlog__unclaimed_drops, unclaimed, __ATOMIC_RELAXED);
         goto out;
     }
+    /* A resync every RTLOG__RESYNC_EVERY bytes: names are announced again and each
+     * ring's exact clock follows, so a decoder that hit a bad frame loses only that stretch. */
+    if (rtlog__since_sync >= RTLOG__RESYNC_EVERY) {
+        uint8_t rs[4 + 17];
+        uint32_t rid = RTLOG__CTRL_RESYNC;
+        memcpy(rs, &rid, 4);
+        rtlog__header(rs + 4);
+        if (wr(user, rs, sizeof rs) != 0) goto out;
+        rtlog__since_sync = 0;
+        for (int i = 0; i < RTLOG_MAX_THREADS; i++) {
+            __atomic_store_n(&rtlog__rings[i].announced, 0, __ATOMIC_RELEASE);
+            rtlog__rings[i].sync_pending = 1;
+        }
+    }
     for (int i = 0; i < RTLOG_MAX_THREADS; i++) {
         struct rtlog__ring *r = &rtlog__rings[i];
         uint32_t st = __atomic_load_n(&r->state, __ATOMIC_ACQUIRE);
         if (st < RTLOG__LIVE) continue;
+        if (r->sync_pending) {
+            if (rtlog__control(wr, user, RTLOG__CTRL_CTX_TIME, r->ctx, &r->drain_ticks, 8) != 0) goto out;
+            r->sync_pending = 0;
+        }
         if (!__atomic_load_n(&r->announced, __ATOMIC_ACQUIRE)) {
             uint8_t name[33];
             size_t nl = strlen(r->name);
@@ -624,6 +664,16 @@ size_t rtlog_drain(rtlog_write_fn wr, void *user) {
             rtlog__copy_out(r, tail, &len, 2);
             rtlog__copy_out(r, tail + 2, frame, len);
             if (wr(user, frame, len) != 0) goto out;
+            {
+                /* the timestamp delta after the 4-byte site ID */
+                uint64_t d = 0;
+                for (int k = 0, sh = 0; 4 + k < len && k < 10; k++, sh += 7) {
+                    d |= (uint64_t)(frame[4 + k] & 0x7f) << sh;
+                    if (!(frame[4 + k] & 0x80)) break;
+                }
+                r->drain_ticks += d;
+                rtlog__since_sync += len;
+            }
             tail += 2u + len;
             __atomic_store_n(&r->tail, tail, __ATOMIC_RELEASE);
             frames++;
@@ -640,17 +690,25 @@ out:
 
 /* ---- crash log (POSIX) ---------------------------------------------------- */
 #if defined(__unix__) || defined(__linux__)
+#include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <unistd.h>
 
 #define RTLOG__CTRL_CRASH 0xFFFFFF07u
-#define RTLOG__CTRL_CTX_TIME 0xFFFFFF09u
 
-/* `<dir>/crash-<pid>-`; a dump appends its number and `.rtlog`. */
+/* `<dir>/crash-`; a dump appends `<pid>-<n>.rtlog`, with the pid read when the dump is
+ * written (a forked child has another one). Panics and snapshots stop after
+ * RTLOG_MAX_SOFT_DUMPS per process so a watchdog that fires in a loop cannot fill the
+ * disk; fatal signals are always dumped. */
+#ifndef RTLOG_MAX_SOFT_DUMPS
+#define RTLOG_MAX_SOFT_DUMPS 16
+#endif
 static char rtlog__crash_prefix[200];
 static uint32_t rtlog__crash_fatal;
-static uint32_t rtlog__crash_seq;
+static uint32_t rtlog__crash_next = 1;
+static uint32_t rtlog__crash_written;
+static uint32_t rtlog__crash_soft;
 
 static int rtlog__fd_write(void *user, const uint8_t *b, size_t n) {
     int fd = (int)(intptr_t)user;
@@ -673,8 +731,10 @@ static void rtlog__crash_ring(int fd, struct rtlog__ring *r) {
     rtlog__control(rtlog__fd_write, u, RTLOG__CTRL_CTX_REGISTER, r->ctx, name, nl + 1);
     uint32_t d = __atomic_load_n(&r->drops, __ATOMIC_RELAXED);
     if (d) rtlog__control(rtlog__fd_write, u, RTLOG__CTRL_DROPPED, r->ctx, &d, 4);
-    uint32_t head = __atomic_load_n(&r->head, __ATOMIC_ACQUIRE);
+    /* tail first, then head: tail <= head always, so [tail, head) is never inverted
+     * (head first lets a running drain move tail past it). */
     uint32_t start = __atomic_load_n(&r->tail, __ATOMIC_ACQUIRE);
+    uint32_t head = __atomic_load_n(&r->head, __ATOMIC_ACQUIRE);
     uint8_t frame[2 + 19 + RTLOG_ARGS_CAP + 20];
     uint64_t deltas = 0;
     for (int pass = 0; pass < 2; pass++) {
@@ -685,9 +745,10 @@ static void rtlog__crash_ring(int fd, struct rtlog__ring *r) {
         for (uint32_t pos = start; pos != head;) {
             uint16_t len;
             rtlog__copy_out(r, pos, &len, 2);
-            if (len > sizeof frame || 2u + len > head - pos) break; /* torn: stop */
+            if (len < 6 || len > sizeof frame || 2u + len > head - pos) break; /* torn: stop */
             rtlog__copy_out(r, pos + 2, frame, len);
             /* The drain released this frame meanwhile; the producer may have reused it. */
+            __atomic_thread_fence(__ATOMIC_ACQUIRE);
             if ((int32_t)(__atomic_load_n(&r->tail, __ATOMIC_ACQUIRE) - pos) > 0) break;
             if (pass == 0) {
                 uint64_t v = 0;
@@ -704,27 +765,42 @@ static void rtlog__crash_ring(int fd, struct rtlog__ring *r) {
     }
 }
 
-/* `<prefix><seq>.rtlog`, with no snprintf (not async-signal-safe). */
-static void rtlog__crash_name(char *out, size_t cap, uint32_t seq) {
-    size_t n = strlen(rtlog__crash_prefix);
-    memcpy(out, rtlog__crash_prefix, n);
+static size_t rtlog__put_dec(char *out, size_t n, uint32_t v) {
     char digits[10];
     int nd = 0;
     do {
-        digits[nd++] = (char)('0' + seq % 10);
-        seq /= 10;
-    } while (seq);
-    while (nd && n + 1 < cap) out[n++] = digits[--nd];
-    const char *ext = ".rtlog";
-    if (n + strlen(ext) + 1 <= cap) memcpy(out + n, ext, strlen(ext) + 1), n += strlen(ext);
-    out[n] = 0;
+        digits[nd++] = (char)('0' + v % 10);
+        v /= 10;
+    } while (v);
+    while (nd) out[n++] = digits[--nd];
+    return n;
+}
+
+/* Create the next dump file with O_EXCL: a file from an earlier run that had the same
+ * pid (containers) is never touched, the number moves on. No snprintf (not
+ * async-signal-safe). */
+static int rtlog__crash_open(void) {
+    char path[sizeof rtlog__crash_prefix + 10 + 1 + 10 + 7];
+    uint32_t pid = (uint32_t)getpid();
+    size_t pl = strlen(rtlog__crash_prefix);
+    for (int tries = 0; tries < 1000; tries++) {
+        uint32_t n = __atomic_fetch_add(&rtlog__crash_next, 1, __ATOMIC_ACQ_REL);
+        size_t k = pl;
+        memcpy(path, rtlog__crash_prefix, pl);
+        k = rtlog__put_dec(path, k, pid);
+        path[k++] = '-';
+        k = rtlog__put_dec(path, k, n);
+        memcpy(path + k, ".rtlog", 7);
+        int fd = open(path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0644);
+        if (fd >= 0) return fd;
+        if (errno != EEXIST) return -1;
+    }
+    return -1;
 }
 
 static void rtlog__crash_dump(uint8_t kind, int sig, int code, uint64_t addr, const char *msg, int fatal) {
     if (!rtlog__crash_prefix[0]) return;
-    char path[sizeof rtlog__crash_prefix + 24];
-    rtlog__crash_name(path, sizeof path, __atomic_add_fetch(&rtlog__crash_seq, 1, __ATOMIC_ACQ_REL));
-    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+    int fd = rtlog__crash_open();
     if (fd < 0) return;
     void *u = (void *)(intptr_t)fd;
     uint8_t h[17];
@@ -764,6 +840,7 @@ static void rtlog__crash_dump(uint8_t kind, int sig, int code, uint64_t addr, co
     memcpy(b + n, msg, ml), n += ml;
     rtlog__fd_write(u, b, n);
     close(fd);
+    __atomic_fetch_add(&rtlog__crash_written, 1, __ATOMIC_ACQ_REL);
 }
 
 static const char *rtlog__signal_name(int sig) {
@@ -777,38 +854,41 @@ static const char *rtlog__signal_name(int sig) {
     }
 }
 
+static uint32_t rtlog__crash_done;
+
 static void rtlog__on_signal(int sig, siginfo_t *si, void *uc) {
     (void)uc;
     if (!__atomic_exchange_n(&rtlog__crash_fatal, 1, __ATOMIC_ACQ_REL)) {
         __atomic_store_n(&rtlog__level, RTLOG_LEVEL_OFF, __ATOMIC_RELAXED); /* freeze */
         rtlog__crash_dump(2, sig, si ? si->si_code : 0, si ? (uint64_t)(uintptr_t)si->si_addr : 0,
                           rtlog__signal_name(sig), 1);
+        __atomic_store_n(&rtlog__crash_done, 1, __ATOMIC_RELEASE);
+    } else {
+        /* Another thread is dumping: let it finish before the default action ends the
+         * process (about two seconds at most). */
+        struct timespec ts = {0, 1000000};
+        for (int i = 0; i < 2000 && !__atomic_load_n(&rtlog__crash_done, __ATOMIC_ACQUIRE); i++)
+            nanosleep(&ts, 0);
     }
-    raise(sig); /* SA_RESETHAND restored the default action */
+    /* Restore the default action and re-raise; the signal is blocked while this
+     * handler runs, so it takes effect when the handler returns. (Not SA_RESETHAND:
+     * it would kill a second faulting thread before it could wait.) */
+    signal(sig, SIG_DFL);
+    raise(sig);
 }
 
 int rtlog_crash_install(const char *dir) {
     size_t n = strlen(dir);
-    char pid[12];
-    int np = 0;
-    unsigned long v = (unsigned long)getpid();
-    do {
-        pid[np++] = (char)('0' + v % 10);
-        v /= 10;
-    } while (v);
-    if (n + 1 + 6 + (size_t)np + 1 + 1 > sizeof rtlog__crash_prefix) return -1;
+    if (n + 1 + 6 + 1 > sizeof rtlog__crash_prefix) return -1;
     memcpy(rtlog__crash_prefix, dir, n);
     if (n && dir[n - 1] != '/') rtlog__crash_prefix[n++] = '/';
-    memcpy(rtlog__crash_prefix + n, "crash-", 6), n += 6;
-    while (np) rtlog__crash_prefix[n++] = pid[--np];
-    rtlog__crash_prefix[n++] = '-';
-    rtlog__crash_prefix[n] = 0;
+    memcpy(rtlog__crash_prefix + n, "crash-", 7);
     static const int sigs[] = {SIGSEGV, SIGBUS, SIGFPE, SIGILL, SIGABRT};
     for (size_t i = 0; i < sizeof sigs / sizeof sigs[0]; i++) {
         struct sigaction sa;
         memset(&sa, 0, sizeof sa);
         sa.sa_sigaction = rtlog__on_signal;
-        sa.sa_flags = SA_SIGINFO | SA_ONSTACK | SA_RESETHAND;
+        sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
         sigemptyset(&sa.sa_mask);
         if (sigaction(sigs[i], &sa, 0) != 0) return -1;
     }
@@ -816,10 +896,12 @@ int rtlog_crash_install(const char *dir) {
 }
 
 void rtlog_crash_snapshot(const char *reason) {
-    if (!__atomic_load_n(&rtlog__crash_fatal, __ATOMIC_ACQUIRE)) rtlog__crash_dump(3, 0, 0, 0, reason, 0);
+    if (__atomic_load_n(&rtlog__crash_fatal, __ATOMIC_ACQUIRE)) return;
+    if (__atomic_fetch_add(&rtlog__crash_soft, 1, __ATOMIC_ACQ_REL) >= RTLOG_MAX_SOFT_DUMPS) return;
+    rtlog__crash_dump(3, 0, 0, 0, reason, 0);
 }
 
-uint32_t rtlog_crash_dumps(void) { return __atomic_load_n(&rtlog__crash_seq, __ATOMIC_ACQUIRE); }
+uint32_t rtlog_crash_dumps(void) { return __atomic_load_n(&rtlog__crash_written, __ATOMIC_ACQUIRE); }
 #endif /* POSIX crash log */
 
 #ifdef __cplusplus
