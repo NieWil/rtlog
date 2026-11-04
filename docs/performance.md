@@ -9,21 +9,21 @@ The [`timing`](../examples/timing.rs) example measures each workload in 2 000 ba
 CI runs it on an x86-64 runner and on an arm64 runner, and posts the table on the job's summary page: [`timing report (x86_64)` / `timing report (aarch64)`](https://github.com/NieWil/rtlog/actions/workflows/ci.yml).
 
 <!-- timing-table -->
-Measured by CI on GitHub-hosted runners (release build). Each CI run republishes these numbers.
+Measured by CI on GitHub-hosted runners (release build), v0.2.0. The `timing report` jobs post fresh numbers on every run.
 
-| Workload | x86-64: AMD EPYC 9V74, 3.60 GHz measured | aarch64: 3.39 GHz measured |
+| Workload | x86-64: AMD EPYC 7763, 3.19 GHz measured | aarch64: 3.39 GHz measured |
 | --- | ---: | ---: |
-| Timestamp read (TSC / `CNTVCT_EL0`) | 9.7 ns · 35 cycles | 13.4 ns · 46 cycles |
-| W1: `info!("x={} y={}", u32, u32)` | **14.9 ns · 53 cycles** | **18.6 ns · 63 cycles** |
-| W2: 6 mixed fields | 14.9 ns · 54 cycles | 19.0 ns · 65 cycles |
-| W3: 32-byte string | 14.3 ns · 51 cycles | 18.5 ns · 63 cycles |
-| Disabled call | 0.4 ns · 1 cycle | 0.5 ns · 2 cycles |
-| W5: 8 threads at once, per thread | 44.6 ns | 31.7 ns |
-| Baseline: timestamped `writeln!` into a buffer | 73.2 ns · 263 cycles | 87.0 ns · 295 cycles |
-| Ring + drain throughput, one thread | 36.7 M frames/s | 34.0 M frames/s |
+| Timestamp read (TSC / `CNTVCT_EL0`) | 11.3 ns · 36 cycles | 13.4 ns · 46 cycles |
+| W1: `info!("x={} y={}", u32, u32)` | **11.4 ns · 36 cycles** | **13.6 ns · 46 cycles** |
+| W2: 6 mixed fields | 12.1 ns · 39 cycles | 13.7 ns · 46 cycles |
+| W3: 32-byte string | 12.8 ns · 41 cycles | 13.7 ns · 46 cycles |
+| Disabled call | 2.2 ns · 7 cycles | 1.0 ns · 3 cycles |
+| W5: 8 threads at once, per thread | 35.3 ns | 25.4 ns |
+| Baseline: timestamped `writeln!` into a buffer | 90.6 ns · 289 cycles | 88.3 ns · 299 cycles |
+| Ring + drain throughput, one thread | 39.3 M frames/s | 41.1 M frames/s |
 <!-- /timing-table -->
 
-A log call costs about 5× less than formatting the same line. The spec's budget is ≤ 50 cycles per W1 call: v0.1 is 3 cycles over it on x86-64 and 13 over on aarch64. Two-thirds of the cost is the timestamp read itself; the rest is the thread-local lookup and a copy through a stack buffer, which are the next optimisation targets. Shared VMs vary from run to run; on the development VM, W1 measured 79–127 cycles.
+A log call costs 6–8× less than formatting the same line, and meets the spec's budget of ≤ 50 cycles per W1 call on both architectures; the `spec rules` CI job fails if it does not. Almost all of it is the timestamp read: `RDTSC` and `CNTVCT_EL0` take 30–50 cycles on their own, and the rest of the call (slot reservation, encoding in place in the ring, one release store) runs in their shadow, out of order. To go lower, install a cheaper clock with `rtlog::set_clock` (a cycle counter or a tick). Shared VMs vary from run to run by 10–20 cycles.
 
 ## Size on a microcontroller
 
@@ -32,14 +32,14 @@ A log call costs about 5× less than formatting the same line. The spec's budget
 | Variant (`thumbv7em-none-eabihf`, `opt-level = "s"`, LTO) | Code | Read-only data | Site descriptors | Flash total | RAM |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | No logging | 180 B | 0 B | 0 B | 1 204 B | 0 B |
-| rtlog, 1 call site | 2 296 B | 52 B | 44 B | 3 416 B | 1 064 B |
-| rtlog, 10 call sites | 2 672 B | 196 B | 404 B | 4 296 B | 1 064 B |
-| `core::fmt`, same 10 messages | 14 932 B | 2 072 B | 0 B | 18 028 B | 0 B |
+| rtlog, 1 call site | 2 352 B | 52 B | 44 B | 3 472 B | 1 072 B |
+| rtlog, 10 call sites | 2 856 B | 196 B | 404 B | 4 480 B | 1 072 B |
+| `core::fmt`, same 10 messages | 16 364 B | 2 072 B | 0 B | 19 460 B | 0 B |
 
 - Fixed runtime (ring, drain, encoder): about **2.1 KB** of code.
-- Each additional call site: about **42 B** of code, plus a 40 B descriptor that only the host reads.
-- RAM: the ring you choose (1 KiB here) plus 40 B of state.
-- 10 messages cost **3.1 KB** of flash with rtlog against **16.8 KB** with `core::fmt`: 5.4× smaller.
+- Each additional call site: about **56 B** of code, plus a 40 B descriptor that only the host reads.
+- RAM: the ring you choose (1 KiB here) plus 48 B of state.
+- 10 messages cost **3.3 KB** of flash with rtlog against **18.3 KB** with `core::fmt`: 5.6× smaller.
 
 ## Measure on your platform
 

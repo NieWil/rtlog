@@ -14,7 +14,7 @@ You write `println!`-style log lines. The device writes a few binary bytes into 
 
 ## Why
 
-- **Cheap on the device.** A log call takes about 15 ns (53 cycles) on x86-64, about 5× less than formatting the line. On Cortex-M4F, 10 messages take 3.1 KB of flash against 16.8 KB with `core::fmt`. [Numbers →](docs/performance.md)
+- **Cheap on the device.** A log call takes 36 cycles (11 ns) on x86-64 and 46 on arm64, 6–8× less than formatting the line. On Cortex-M4F, 10 messages take 3.3 KB of flash against 18.3 KB with `core::fmt`. [Numbers →](docs/performance.md)
 - **Never in the way.** Each thread or task owns its ring. A full ring drops and counts; it never blocks an ISR or a control loop.
 - **More than text.** Spans, typed fields and per-thread timelines export straight to Perfetto. [See a real app traced →](docs/use-cases/perfetto.md)
 - **One format everywhere.** Rust (`no_std` and `std`), C, C++ and Zephyr all write the same stream and use the same decoder.
@@ -77,7 +77,7 @@ Each call site gets an ID at build time; its format string goes into a contract 
 
 ## Status
 
-v0.2 preview. Every CI run tests it on Linux, macOS, Windows, and on arm64, ARMv7, RISC-V and x86 under QEMU. Each run also includes a 2-minute soak test, Miri, and Thread and Address sanitizers. Before 1.0: strip format strings from shipped binaries, reach the ≤ 50-cycle budget per call, and add `derive(Log)` and the `log` / `tracing` / `defmt` bridges.
+v0.2 preview. Every CI run tests it on Linux, macOS, Windows, and on arm64, ARMv7, RISC-V and x86 under QEMU. Each run also includes a 2-minute soak test, Miri, and Thread and Address sanitizers. Before 1.0: strip format strings from shipped binaries, measure the Cortex-M cycle budget on hardware, and add `derive(Log)` and the `log` / `tracing` / `defmt` bridges.
 
 ## Licence
 
