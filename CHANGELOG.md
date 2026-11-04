@@ -38,6 +38,6 @@ Deferred, lock-free binary logging and tracing for real-time code, from Cortex-M
 
 - Format strings still ship in binaries; stripping them is planned.
 - The ≤ 50-cycle budget per call is not met yet.
-- See [implementation notes](docs/implementation.md).
+- See [implementation notes](https://github.com/NieWil/rtlog/blob/main/docs/implementation.md).
 
 Licensed under MIT OR Apache-2.0.

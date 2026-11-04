@@ -7,7 +7,7 @@ Three stages. At **build** time, each call site gets an ID and a descriptor. At 
 flowchart LR
   subgraph B["Build"]
     direction TB
-    M["rtlog::info!(&quot;x={}&quot;, x)"] --> S[("site descriptor<br/>ID · level · fmt")]
+    M["rtlog::info!(…)"] --> S[("site descriptor<br/>ID · level · fmt")]
   end
   subgraph T["Target · MCU, Linux, desktop"]
     direction TB
