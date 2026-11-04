@@ -1,0 +1,126 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace
+
+  no-std:
+    name: no_std (Cortex-M4F)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: thumbv7em-none-eabihf
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build -p rtlog-core --no-default-features --target thumbv7em-none-eabihf --release
+
+  examples:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: basic (threads, file drain, decode)
+        run: cargo run -p rtlog-examples --example basic -- target/example-out
+      - name: static_rings (no_std API, custom clock)
+        run: cargo run -p rtlog-examples --example static_rings
+      - name: CLI decodes the captured file
+        run: |
+          cargo run -q -p rtlog-decode --bin rtlog -- check target/example-out/basic.contract.jsonl
+          cargo run -q -p rtlog-decode --bin rtlog -- decode --contract target/example-out/basic.contract.jsonl target/example-out/basic.rtlog
+      - uses: actions/upload-artifact@v4
+        with:
+          name: example-capture
+          path: target/example-out/
+
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+      - name: Run tests with coverage
+        run: cargo llvm-cov --workspace --lcov --output-path lcov.info
+      - name: Coverage summary
+        run: |
+          {
+            echo "## Unit test coverage"
+            echo
+            echo '```'
+            cargo llvm-cov report --summary-only
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-lcov
+          path: lcov.info
+
+  timing:
+    name: timing report
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo run --release -p rtlog-examples --example timing -- --out timing.md
+      - run: cat timing.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: timing-report
+          path: timing.md
+
+  bench:
+    name: benchmarks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Criterion (short run)
+        run: |
+          cargo bench -p rtlog-core --bench log_call -- --warm-up-time 1 --measurement-time 3
+          cargo bench -p rtlog-decode --bench decode -- --warm-up-time 1 --measurement-time 3
+      - name: Benchmark summary
+        run: python3 scripts/bench_report.py target/criterion | tee bench.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: criterion
+          path: |
+            bench.md
+            target/criterion/
