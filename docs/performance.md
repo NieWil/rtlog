@@ -95,4 +95,4 @@ The [release workflow](../.github/workflows/release.yml) builds the `rtlog` CLI 
 - macOS on Intel and Apple silicon;
 - Windows.
 
-It also packages the C/C++ header with the Zephyr module. See [Releases](https://github.com/NieWil/rtlog/releases).
+It also packages the C/C++ header with the Zephyr module. See [Releases](https://github.com/NieWil/rtlog/releases), and [Releasing](releasing.md) for how a release is cut.
