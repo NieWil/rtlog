@@ -178,7 +178,7 @@ jobs:
       - run: cargo test --release -p rtlog-decode --test soak -- --ignored --nocapture
         env:
           RTLOG_SOAK_SECS: "120"
-          RTLOG_SOAK_REPORT: soak.md
+          RTLOG_SOAK_REPORT: ${{ github.workspace }}/soak.md
       - run: cat soak.md >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         with:
