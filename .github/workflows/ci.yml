@@ -87,6 +87,8 @@ jobs:
         run: cargo run -p rtlog-examples --example basic -- target/example-out
       - name: static_rings (no_std API, custom clock)
         run: cargo run -p rtlog-examples --example static_rings
+      - name: stdout_mode (text on stdout, level from RTLOG)
+        run: RTLOG=debug cargo run -p rtlog-examples --example stdout_mode | tee stdout.txt && grep -q "DEBUG   request id=2" stdout.txt
       - name: app_trace (spans, lock watchdog, memory counters; Perfetto export)
         run: cargo run --release -p rtlog-examples --example app_trace -- target/example-out/app_trace
       - name: CLI decodes the captured file
@@ -182,6 +184,45 @@ jobs:
         with:
           name: timing-report-${{ matrix.arch }}
           path: timing.md
+
+  spec-rules:
+    name: spec rules (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            arch: x86_64
+          - os: ubuntu-24.04-arm
+            arch: aarch64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: thumbv7em-none-eabihf
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: spec-${{ matrix.arch }}
+          workspaces: |
+            .
+            size/mcu
+      - name: Timing (twice; the best run counts on a shared runner)
+        run: |
+          cargo run --release -p rtlog-examples --example timing -- --out timing-1.md
+          cargo run --release -p rtlog-examples --example timing -- --out timing-2.md
+      - name: Size on Cortex-M4F
+        if: matrix.arch == 'x86_64'
+        run: python3 scripts/size_report.py --out size.md
+      - name: Check the spec's rules (real-time, wire, usability, performance, memory)
+        run: |
+          size_arg=""
+          [ -f size.md ] && size_arg="--size size.md"
+          python3 scripts/spec_check.py --timing timing-1.md timing-2.md $size_arg | tee spec-check.md
+          exit ${PIPESTATUS[0]}
+      - if: always()
+        run: cat spec-check.md >> "$GITHUB_STEP_SUMMARY"
 
   size:
     name: size (Cortex-M4F)

@@ -25,6 +25,21 @@ pub const CTRL_SPAN_OPEN: u32 = CONTROL_BASE + 4;
 /// Timed like a log frame (ts delta, ctx), then: u64 span ID.
 pub const CTRL_SPAN_CLOSE: u32 = CONTROL_BASE + 5;
 
+/// Timed like a log frame (ts delta, ctx), then: u8 kind (1 = panic,
+/// 2 = signal), i32 signal, i32 signal code, u64 fault address, u64 program
+/// counter, message as a dynamic string (len byte + UTF-8). Written by the
+/// crash handler as the last frame of a crash dump (spec section 8b).
+pub const CTRL_CRASH: u32 = CONTROL_BASE + 7;
+/// Payload: ctx varint, u64 absolute ticks. Sets the context's clock, so the
+/// deltas that follow decode to absolute times even when earlier frames of
+/// that context are in another stream (a crash dump holds only the tail).
+pub const CTRL_CTX_TIME: u32 = CONTROL_BASE + 9;
+
+/// Crash kinds in a `crash` frame.
+pub const CRASH_PANIC: u8 = 1;
+/// See [`CRASH_PANIC`].
+pub const CRASH_SIGNAL: u8 = 2;
+
 /// Encode a `span_open` payload.
 pub fn span_open_payload(site: u32, id: u64, parent: u64) -> [u8; 20] {
     let mut b = [0u8; 20];

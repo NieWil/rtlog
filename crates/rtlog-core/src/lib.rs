@@ -39,6 +39,8 @@ pub mod wire;
 
 #[cfg(feature = "std")]
 pub mod contract;
+#[cfg(all(feature = "std", unix))]
+pub mod crash;
 #[cfg(feature = "std")]
 mod runtime;
 
@@ -63,7 +65,7 @@ pub mod __private {
     pub use linkme;
 
     #[cfg(feature = "std")]
-    pub use crate::runtime::{__local_push, __span_enter as span_enter};
+    pub use crate::runtime::__span_enter as span_enter;
 
     /// Uninitialised argument buffer for one log call.
     #[inline(always)]
@@ -72,30 +74,21 @@ pub mod __private {
         unsafe { MaybeUninit::<[MaybeUninit<u8>; crate::ARGS_CAP]>::uninit().assume_init() }
     }
 
-    /// Push a finished argument writer through a producer.
+    /// Emit a frame through a producer; `encode` writes the arguments.
     #[inline(always)]
-    pub fn push_to<const N: usize>(
+    pub fn emit_to<const N: usize, F: FnOnce(&mut crate::Writer<'_>)>(
         p: &mut crate::Producer<'_, N>,
         site: u32,
-        w: &crate::Writer<'_>,
+        encode: F,
     ) {
-        if w.overflowed() {
-            p.count_drop();
-        } else {
-            p.push(site, w.as_slice());
-        }
+        p.emit(site, encode);
     }
 
-    /// Push a finished argument writer into the calling thread's ring.
+    /// Emit a frame into the calling thread's ring; `encode` writes the arguments.
     #[cfg(feature = "std")]
     #[inline(always)]
-    pub fn push_local(site: u32, w: &crate::Writer<'_>) {
-        if w.overflowed() {
-            // Oversize argument lists are counted as drops by the ring.
-            __local_push(site, &[0u8; crate::ARGS_CAP + 1]);
-        } else {
-            __local_push(site, w.as_slice());
-        }
+    pub fn emit_local<F: FnOnce(&mut crate::Writer<'_>)>(site: u32, encode: F) {
+        crate::runtime::__local_emit(site, encode)
     }
 
     pub const fn nargs(n: usize) -> u8 {
@@ -158,20 +151,18 @@ macro_rules! log {
         let __id: u32 =
             $crate::log!(@site $lvl, $fmt, <[()]>::len(&[$($crate::__unit!($arg)),*]));
         if $crate::enabled($lvl) {
-            let mut __buf = $crate::__private::args_buf();
-            let mut __w = $crate::Writer::new_uninit(&mut __buf);
-            $( $crate::Log::write(&$arg, &mut __w); )*
-            $crate::__private::push_to($p, __id, &__w);
+            $crate::__private::emit_to($p, __id, |__w: &mut $crate::Writer<'_>| {
+                $( $crate::Log::write(&$arg, __w); )*
+            });
         }
     }};
     ($lvl:expr, $fmt:literal $(, $arg:expr)* $(,)?) => {{
         let __id: u32 =
             $crate::log!(@site $lvl, $fmt, <[()]>::len(&[$($crate::__unit!($arg)),*]));
         if $crate::enabled($lvl) {
-            let mut __buf = $crate::__private::args_buf();
-            let mut __w = $crate::Writer::new_uninit(&mut __buf);
-            $( $crate::Log::write(&$arg, &mut __w); )*
-            $crate::__private::push_local(__id, &__w);
+            $crate::__private::emit_local(__id, |__w: &mut $crate::Writer<'_>| {
+                $( $crate::Log::write(&$arg, __w); )*
+            });
         }
     }};
 }

@@ -16,6 +16,10 @@ std = []
 [dependencies]
 linkme = "0.3"
 
+# Crash handler (signals, open/write) on Unix with `std`; never on bare metal.
+[target.'cfg(unix)'.dependencies]
+libc = { version = "0.2", default-features = false }
+
 [dev-dependencies]
 criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
 

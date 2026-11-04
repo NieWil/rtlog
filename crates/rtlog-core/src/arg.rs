@@ -102,6 +102,21 @@ impl<'a> Writer<'a> {
         }
     }
 
+    /// A writer over `cap` bytes at `ptr` (ring memory on the fast path).
+    ///
+    /// SAFETY: `[ptr, ptr + cap)` must be valid for writes and exclusively owned
+    /// for `'a`.
+    #[inline(always)]
+    pub(crate) unsafe fn from_raw(ptr: *mut u8, cap: usize) -> Self {
+        Writer {
+            ptr,
+            cap,
+            pos: 0,
+            overflow: false,
+            _buf: PhantomData,
+        }
+    }
+
     /// Bytes written so far.
     #[inline]
     pub fn len(&self) -> usize {
@@ -141,10 +156,23 @@ impl<'a> Writer<'a> {
         }
     }
 
+    /// Append a fixed-size array. The size is a constant, so this compiles to
+    /// plain stores instead of a `memcpy` call.
+    #[inline(always)]
+    pub fn put_array<const N: usize>(&mut self, bytes: [u8; N]) {
+        if N <= self.cap - self.pos {
+            // SAFETY: bounds checked above; unaligned store of a byte array.
+            unsafe { core::ptr::write_unaligned(self.ptr.add(self.pos).cast::<[u8; N]>(), bytes) };
+            self.pos += N;
+        } else {
+            self.overflow = true;
+        }
+    }
+
     /// Append one byte.
     #[inline(always)]
     pub fn put_u8(&mut self, b: u8) {
-        self.put(&[b]);
+        self.put_array([b]);
     }
 
     /// Append a dynamic (tier 3) payload: length byte with truncation flag, then bytes.
@@ -178,7 +206,7 @@ macro_rules! impl_num {
             #[inline(always)]
             fn write(&self, w: &mut Writer<'_>) {
                 w.put_u8(Tag::$tag as u8);
-                w.put(&self.to_le_bytes());
+                w.put_array(self.to_le_bytes());
             }
         }
     )*};
@@ -201,7 +229,7 @@ impl Log for usize {
     #[inline(always)]
     fn write(&self, w: &mut Writer<'_>) {
         w.put_u8(Self::TAG as u8);
-        w.put(&self.to_le_bytes());
+        w.put_array(self.to_le_bytes());
     }
 }
 
@@ -215,7 +243,7 @@ impl Log for isize {
     #[inline(always)]
     fn write(&self, w: &mut Writer<'_>) {
         w.put_u8(Self::TAG as u8);
-        w.put(&self.to_le_bytes());
+        w.put_array(self.to_le_bytes());
     }
 }
 
@@ -224,7 +252,7 @@ impl Log for bool {
     const MAX: usize = 2;
     #[inline(always)]
     fn write(&self, w: &mut Writer<'_>) {
-        w.put(&[Tag::Bool as u8, *self as u8]);
+        w.put_array([Tag::Bool as u8, *self as u8]);
     }
 }
 
@@ -234,7 +262,7 @@ impl Log for char {
     #[inline(always)]
     fn write(&self, w: &mut Writer<'_>) {
         w.put_u8(Tag::Char as u8);
-        w.put(&(*self as u32).to_le_bytes());
+        w.put_array((*self as u32).to_le_bytes());
     }
 }
 
@@ -299,7 +327,7 @@ impl<T: Log, const N: usize> Log for [T; N] {
     #[inline]
     fn write(&self, w: &mut Writer<'_>) {
         w.put_u8(Tag::Array as u8);
-        w.put(&(N as u16).to_le_bytes());
+        w.put_array((N as u16).to_le_bytes());
         for v in self {
             v.write(w);
         }

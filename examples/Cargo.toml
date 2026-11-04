@@ -28,3 +28,7 @@ path = "app_trace.rs"
 [[example]]
 name = "perfetto_quickstart"
 path = "perfetto_quickstart.rs"
+
+[[example]]
+name = "stdout_mode"
+path = "stdout_mode.rs"

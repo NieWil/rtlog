@@ -18,9 +18,10 @@ This file tracks how the code in `crates/` matches [the specification](spec.md):
 | 10c Benchmark model: workloads W1–W5, timing report, Criterion | Built (host only) | `examples/timing.rs`, `benches/` |
 | Verification: soak test, Miri, ThreadSanitizer, AddressSanitizer | Built | `tests/soak.rs`, CI jobs `miri`, `sanitizers`, `soak` |
 | 4 Contract from the image (`cargo rtlog contract`) | Built as `rtlog contract --elf`, for Rust and C descriptors, PIE relocations applied | `rtlog-decode/src/elf.rs` |
+| 8b Debug stdout, crash log (Unix; C on POSIX) | Built | `rtlog_decode::stdout`, `rtlog::crash`, `rtlog_crash_install` |
 | C / C++ producer, Zephyr module | Built (Zephyr not CI-built) | `c/include/rtlog.h`, `c/zephyr`, `zephyr/module.yml` |
 | 10c Benchmarks in cycles, size on Cortex-M4F | Built | `examples/timing.rs`, `size/mcu`, `scripts/size_report.py` |
-| 5 resync, compression, AEAD; 8b crash log; 10 `log` / `tracing` / `defmt` bridges and OTLP / CTF outputs; shared memory | Not yet | — |
+| 5 resync, compression, AEAD; 8b MCU crash capture; 10 `log` / `tracing` / `defmt` bridges and OTLP / CTF outputs; shared memory; contract stripping | Not yet | — |
 
 ## Deviations from the spec
 
@@ -44,4 +45,4 @@ This file tracks how the code in `crates/` matches [the specification](spec.md):
 
 ## Performance status
 
-Budgets are now in cycles (spec section 10c): ≤ 50 cycles per W1 call on x86-64 and aarch64. The CI `timing` jobs (x86-64 and arm64 runners) report ns and cycles, with a measured core clock; see [Performance and size](performance.md). v0.1 does not meet the budget yet: about a third of the cost is the timestamp read, and the rest is the thread-local lookup and a copy through a stack buffer.
+The spec's budgets (section 10c) are enforced in CI by `scripts/spec_check.py`: ≤ 50 cycles per W1 call (x86-64 and aarch64 runners) and, on Cortex-M4F, ≤ 2560 bytes of fixed runtime code and ≤ 64 bytes per call site. The current figures are on the CI job pages and in [Performance and size](performance.md). On hosts the log call encodes its frame in place in the ring (82 instructions for W1 on x86-64); most of the remaining cost is the timestamp read itself (`rdtsc`, `CNTVCT_EL0`).

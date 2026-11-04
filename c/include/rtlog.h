@@ -104,6 +104,12 @@ rtlog_span_t rtlog_span_enter(const struct rtlog_site *site);
 void rtlog_span_exit(rtlog_span_t span);
 size_t rtlog_drain(rtlog_write_fn write, void *user);
 uint32_t rtlog_dropped(void);
+/* Crash log (POSIX): on SIGSEGV, SIGFPE, SIGBUS, SIGILL or SIGABRT, write
+ * every undrained record plus a CRASH record to `path`, then let the signal's
+ * default action run. Returns 0 on success. */
+int rtlog_crash_install(const char *path);
+/* Write the same dump now, without crashing (e.g. from a watchdog). */
+void rtlog_crash_snapshot(const char *reason);
 
 extern int rtlog__level;
 
@@ -517,6 +523,18 @@ static uint32_t rtlog__fnv(const uint8_t *p, size_t n) {
     return h;
 }
 
+/* The 17-byte stream header for this binary's contract and clock. */
+static void rtlog__header(uint8_t h[17]) {
+    uint32_t n = __start_rtlog_sites ? (uint32_t)(__stop_rtlog_sites - __start_rtlog_sites) : 0, hash = 0;
+    for (uint32_t id = 1; id <= n; id++) hash += rtlog__fnv((const uint8_t *)&id, 4);
+    memset(h, 0, 17);
+    memcpy(h, "RTL1", 4);
+    h[4] = 1;
+    memcpy(h + 6, &hash, 4);
+    memcpy(h + 10, &rtlog__hz, 4);
+    h[14] = (uint8_t)sizeof(void *);
+}
+
 static int rtlog__control(rtlog_write_fn wr, void *user, uint32_t id, uint32_t ctx, const void *tail, size_t tn) {
     uint8_t b[4 + 5 + 1 + 32 + 4];
     memcpy(b, &id, 4);
@@ -531,12 +549,8 @@ size_t rtlog_drain(rtlog_write_fn wr, void *user) {
     size_t frames = 0;
     uint8_t frame[2 + 19 + RTLOG_ARGS_CAP + 20];
     if (!rtlog__header_sent) {
-        uint32_t n = __start_rtlog_sites ? (uint32_t)(__stop_rtlog_sites - __start_rtlog_sites) : 0, hash = 0;
-        for (uint32_t id = 1; id <= n; id++) hash += rtlog__fnv((const uint8_t *)&id, 4);
-        uint8_t h[17] = {'R', 'T', 'L', '1', 1, 0};
-        memcpy(h + 6, &hash, 4);
-        memcpy(h + 10, &rtlog__hz, 4);
-        h[14] = (uint8_t)sizeof(void *);
+        uint8_t h[17];
+        rtlog__header(h);
         if (wr(user, h, sizeof h) != 0) goto out;
         rtlog__header_sent = 1;
     }
@@ -581,6 +595,145 @@ out:
     __atomic_store_n(&rtlog__busy, 0, __ATOMIC_RELEASE);
     return frames;
 }
+
+/* ---- crash log (POSIX) ---------------------------------------------------- */
+#if defined(__unix__) || defined(__linux__)
+#include <fcntl.h>
+#include <signal.h>
+#include <unistd.h>
+
+#define RTLOG__CTRL_CRASH 0xFFFFFF07u
+#define RTLOG__CTRL_CTX_TIME 0xFFFFFF09u
+
+static char rtlog__crash_path[256];
+static uint32_t rtlog__crash_fatal;
+
+static int rtlog__fd_write(void *user, const uint8_t *b, size_t n) {
+    int fd = (int)(intptr_t)user;
+    while (n) {
+        ssize_t w = write(fd, b, n);
+        if (w <= 0) return 1;
+        b += w;
+        n -= (size_t)w;
+    }
+    return 0;
+}
+
+/* Unread frames of one ring, read without consuming: name, drops, time base, frames. */
+static void rtlog__crash_ring(int fd, struct rtlog__ring *r) {
+    void *u = (void *)(intptr_t)fd;
+    uint8_t name[33];
+    size_t nl = strnlen(r->name, 31);
+    name[0] = (uint8_t)nl;
+    memcpy(name + 1, r->name, nl);
+    rtlog__control(rtlog__fd_write, u, RTLOG__CTRL_CTX_REGISTER, r->ctx, name, nl + 1);
+    uint32_t d = __atomic_load_n(&r->drops, __ATOMIC_RELAXED);
+    if (d) rtlog__control(rtlog__fd_write, u, RTLOG__CTRL_DROPPED, r->ctx, &d, 4);
+    uint32_t head = __atomic_load_n(&r->head, __ATOMIC_ACQUIRE);
+    uint32_t start = __atomic_load_n(&r->tail, __ATOMIC_ACQUIRE);
+    uint8_t frame[2 + 19 + RTLOG_ARGS_CAP + 20];
+    uint64_t deltas = 0;
+    for (int pass = 0; pass < 2; pass++) {
+        if (pass == 1) {
+            uint64_t base = r->last_ts > deltas ? r->last_ts - deltas : 0;
+            rtlog__control(rtlog__fd_write, u, RTLOG__CTRL_CTX_TIME, r->ctx, &base, 8);
+        }
+        for (uint32_t pos = start; pos != head;) {
+            uint16_t len;
+            rtlog__copy_out(r, pos, &len, 2);
+            if (len > sizeof frame || 2u + len > head - pos) break; /* torn: stop */
+            rtlog__copy_out(r, pos + 2, frame, len);
+            if (pass == 0) {
+                uint64_t v = 0;
+                for (int i = 0, s = 0; 4 + i < len && i < 10; i++, s += 7) {
+                    v |= (uint64_t)(frame[4 + i] & 0x7f) << s;
+                    if (!(frame[4 + i] & 0x80)) break;
+                }
+                deltas += v;
+            } else {
+                rtlog__fd_write(u, frame, len);
+            }
+            pos += 2u + len;
+        }
+    }
+}
+
+static void rtlog__crash_dump(uint8_t kind, int sig, int code, uint64_t addr, const char *msg) {
+    if (!rtlog__crash_path[0]) return;
+    int fd = open(rtlog__crash_path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+    if (fd < 0) return;
+    void *u = (void *)(intptr_t)fd;
+    uint8_t h[17];
+    rtlog__header(h);
+    rtlog__fd_write(u, h, sizeof h);
+    for (int i = 0; i < RTLOG_MAX_THREADS; i++) {
+        struct rtlog__ring *r = &rtlog__rings[i];
+        if (__atomic_load_n(&r->state, __ATOMIC_ACQUIRE) >= RTLOG__LIVE) rtlog__crash_ring(fd, r);
+    }
+    /* The crash record, on the crashing thread's context. */
+    struct rtlog__ring *me = rtlog__mine;
+    uint32_t ctx = me ? me->ctx : 0;
+    uint64_t last = me ? me->last_ts : 0, now = rtlog__now();
+    if (!me) rtlog__control(rtlog__fd_write, u, RTLOG__CTRL_CTX_TIME, 0, &last, 8);
+    uint8_t b[4 + 10 + 5 + 1 + 4 + 4 + 8 + 8 + 1 + 127];
+    uint32_t id = RTLOG__CTRL_CRASH;
+    memcpy(b, &id, 4);
+    size_t n = 4;
+    n += rtlog__varint(now > last ? now - last : 0, b + n);
+    n += rtlog__varint(ctx, b + n);
+    b[n++] = kind;
+    memcpy(b + n, &sig, 4), n += 4;
+    memcpy(b + n, &code, 4), n += 4;
+    memcpy(b + n, &addr, 8), n += 8;
+    memset(b + n, 0, 8), n += 8; /* program counter: not portable from C */
+    size_t ml = msg ? strnlen(msg, 127) : 0;
+    b[n++] = (uint8_t)ml;
+    memcpy(b + n, msg, ml), n += ml;
+    rtlog__fd_write(u, b, n);
+    close(fd);
+}
+
+static const char *rtlog__signal_name(int sig) {
+    switch (sig) {
+    case SIGSEGV: return "SIGSEGV: invalid memory access";
+    case SIGBUS: return "SIGBUS: bus error";
+    case SIGFPE: return "SIGFPE: arithmetic error (e.g. integer division by zero)";
+    case SIGILL: return "SIGILL: illegal instruction";
+    case SIGABRT: return "SIGABRT: abort";
+    default: return "signal";
+    }
+}
+
+static void rtlog__on_signal(int sig, siginfo_t *si, void *uc) {
+    (void)uc;
+    if (!__atomic_exchange_n(&rtlog__crash_fatal, 1, __ATOMIC_ACQ_REL)) {
+        __atomic_store_n(&rtlog__level, RTLOG_LEVEL_OFF, __ATOMIC_RELAXED); /* freeze */
+        rtlog__crash_dump(2, sig, si ? si->si_code : 0, si ? (uint64_t)(uintptr_t)si->si_addr : 0,
+                          rtlog__signal_name(sig));
+    }
+    raise(sig); /* SA_RESETHAND restored the default action */
+}
+
+int rtlog_crash_install(const char *path) {
+    size_t n = strlen(path);
+    if (n >= sizeof rtlog__crash_path) return -1;
+    memcpy(rtlog__crash_path, path, n + 1);
+    static const int sigs[] = {SIGSEGV, SIGBUS, SIGFPE, SIGILL, SIGABRT};
+    for (size_t i = 0; i < sizeof sigs / sizeof sigs[0]; i++) {
+        struct sigaction sa;
+        memset(&sa, 0, sizeof sa);
+        sa.sa_sigaction = rtlog__on_signal;
+        sa.sa_flags = SA_SIGINFO | SA_ONSTACK | SA_RESETHAND;
+        sigemptyset(&sa.sa_mask);
+        if (sigaction(sigs[i], &sa, 0) != 0) return -1;
+    }
+    return 0;
+}
+
+void rtlog_crash_snapshot(const char *reason) {
+    if (!__atomic_load_n(&rtlog__crash_fatal, __ATOMIC_ACQUIRE)) rtlog__crash_dump(3, 0, 0, 0, reason);
+}
+#endif /* POSIX crash log */
 
 #ifdef __cplusplus
 } /* extern "C" */

@@ -69,11 +69,13 @@ fn add_chain(n: u64) -> Option<u64> {
     unsafe {
         std::arch::asm!(
             "2:",
-            "add {x}, 1", "add {x}, 1", "add {x}, 1", "add {x}, 1",
-            "add {x}, 1", "add {x}, 1", "add {x}, 1", "add {x}, 1",
+            // Register-register adds: recent Intel cores fold dependent
+            // `add reg, imm` chains at rename, which would overstate the clock.
+            "add {x}, {one}", "add {x}, {one}", "add {x}, {one}", "add {x}, {one}",
+            "add {x}, {one}", "add {x}, {one}", "add {x}, {one}", "add {x}, {one}",
             "dec {i}",
             "jnz 2b",
-            x = inout(reg) x => _, i = inout(reg) i => _,
+            x = inout(reg) x => _, i = inout(reg) i => _, one = in(reg) 1u64,
             options(nomem, nostack),
         );
         return Some(8 * n);
@@ -108,17 +110,20 @@ fn add_chain(n: u64) -> Option<u64> {
     None
 }
 
-/// Measured core clock in GHz (cycles per ns): best of several runs.
+/// Measured core clock in GHz (cycles per ns): the median of several runs, so a
+/// single scheduling or clock hiccup on a shared VM cannot skew it.
 fn core_ghz() -> Option<f64> {
     let n = 4_000_000u64;
     add_chain(n / 10)?; // warm up the core's clock
-    (0..7)
+    let mut runs: Vec<f64> = (0..9)
         .map(|_| {
             let t = Instant::now();
             let adds = add_chain(n).unwrap();
-            adds as f64 / t.elapsed().as_nanos() as f64
+            adds as f64 / t.elapsed().as_nanos().max(1) as f64
         })
-        .reduce(f64::max)
+        .collect();
+    runs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    Some(runs[runs.len() / 2])
 }
 
 fn cpu_model() -> String {

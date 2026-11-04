@@ -30,6 +30,11 @@ fn handle(req: &Request) {
 }
 ```
 
+```rust
+let _log = rtlog_decode::stdout::init();          // text on stdout while developing; RTLOG=debug
+rtlog::crash::install("crash.rtlog")?;            // keep the last records if the process dies
+```
+
 ```sh
 cargo run --release -p rtlog-examples --example perfetto_quickstart
 # open target/quickstart.perfetto.json in https://ui.perfetto.dev
@@ -41,6 +46,7 @@ cargo run --release -p rtlog-examples --example perfetto_quickstart
 | [`app_trace`](examples/app_trace.rs) | A traced app: 1 kHz control loop, worker pool, a lock-order deadlock caught by a watchdog, heap counters |
 | [`static_rings`](examples/static_rings.rs) | The `no_std` API: static rings, explicit producers, idle-loop drain |
 | [`c/examples`](c/examples) | The same from C and C++ |
+| [`stdout_mode`](examples/stdout_mode.rs) | Read logs as text on stdout, like `env_logger`, with binary log calls |
 | [`timing`](examples/timing.rs) | Cost per call in ns and cycles on your machine |
 
 ## How it works
@@ -54,6 +60,7 @@ Each call site gets an ID at build time; its format string goes into a contract 
 | | |
 | --- | --- |
 | [Perfetto tracing](docs/use-cases/perfetto.md) | Follow an application thread by thread, down to the microsecond |
+| [When the process crashes](docs/crash.md) | Panics, segfaults, division by zero, abort: what is kept and what to do |
 | [Embedded Rust](docs/embedded.md) | `no_std` setup, linker snippet, getting the contract from firmware |
 | [C and C++](docs/c-cpp.md) | Header-only producer, build, capture, decode |
 | [Zephyr](docs/zephyr.md) | Module, Kconfig, transports |

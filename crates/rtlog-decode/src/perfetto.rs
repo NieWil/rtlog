@@ -105,6 +105,17 @@ pub(crate) fn export(items: &[Item<'_>], names: &HashMap<u32, String>, clock_hz:
                     ev.push(json!({"ph": "E", "pid": 1, "tid": ctx, "ts": us(*ts_ns, t0), "name": name, "cat": "span"}));
                 }
             }
+            Item::Crash { ts_ns, ctx, crash } => {
+                let ts = us(*ts_ns, t0);
+                let name = format!(
+                    "{} {}",
+                    if crash.kind == 3 { "SNAPSHOT" } else { "CRASH" },
+                    crash.describe()
+                );
+                // On the crashing thread's track, and as a global marker across all tracks.
+                ev.push(json!({"ph": "i", "s": "t", "pid": 1, "tid": ctx, "ts": ts, "cat": "crash", "name": name}));
+                ev.push(json!({"ph": "i", "s": "g", "pid": 1, "tid": ctx, "ts": ts, "cat": "crash", "name": name}));
+            }
             Item::Dropped { ts_ns, ctx, count } => {
                 drops_total += u64::from(*count);
                 let ts = us(*ts_ns, t0);

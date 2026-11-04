@@ -296,6 +296,7 @@ name = "rtlog-core"
 version = "0.1.0"
 dependencies = [
  "criterion",
+ "libc",
  "linkme",
 ]
 
@@ -304,6 +305,7 @@ name = "rtlog-decode"
 version = "0.1.0"
 dependencies = [
  "criterion",
+ "libc",
  "object",
  "rtlog-core",
  "serde",

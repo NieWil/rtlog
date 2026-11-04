@@ -30,4 +30,26 @@ check demo_cpp "INFO    request id=0 route=/health"
 check demo_cpp "DEBUG     rows=3 cached=false"
 check demo_cpp "WARN  shutdown pending=0 ok=true"
 test "$(grep -c 'INFO  demo\|INFO    request' "$OUT/demo.txt" "$OUT/demo_cpp.txt" | awk -F: '{s+=$2} END {print s}')" -ge 32
+
+# Crash logging: the process really crashes; the dump must hold every record.
+"$CC" -O1 -g -std=gnu11 -Wall -Wextra -Werror -pthread -I c/include c/examples/crash.c -o "$OUT/crash"
+"$RTLOG" contract --elf "$OUT/crash" -o "$OUT/crash.contract.jsonl"
+expect_crash() { # mode, expected exit status (128 + signal), expected text
+  set +e
+  "$OUT/crash" "$1" "$OUT/crash-$1.rtlog" 2>/dev/null
+  local st=$?
+  set -e
+  [ "$st" = "$2" ] || { echo "crash $1: exit $st, expected $2"; exit 1; }
+  "$RTLOG" decode --contract "$OUT/crash.contract.jsonl" "$OUT/crash-$1.rtlog" > "$OUT/crash-$1.txt"
+  [ "$(grep -c 'before crash i=' "$OUT/crash-$1.txt")" = 500 ] || { echo "crash $1: records lost"; tail "$OUT/crash-$1.txt"; exit 1; }
+  [ "$(grep -c 'worker step=' "$OUT/crash-$1.txt")" = 200 ] || { echo "crash $1: worker records lost"; exit 1; }
+  tail -1 "$OUT/crash-$1.txt" | grep -q -- "$3" || { echo "crash $1: last line"; tail -2 "$OUT/crash-$1.txt"; exit 1; }
+  echo "crash $1: $(tail -1 "$OUT/crash-$1.txt")"
+}
+case "$(uname -m)" in
+  x86_64|i?86) expect_crash fpe 136 "CRASH SIGFPE" ;; # integer division by zero traps on x86 only
+esac
+expect_crash segv 139 "CRASH SIGSEGV"
+expect_crash abort 134 "CRASH SIGABRT"
+expect_crash snapshot 0 "SNAP  snapshot: watchdog: deadline missed"
 echo "C and C++ end-to-end OK ($CC, $CXX)"

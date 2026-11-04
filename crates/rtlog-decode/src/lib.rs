@@ -17,6 +17,7 @@ pub mod contract;
 pub mod elf;
 mod perfetto;
 pub mod render;
+pub mod stdout;
 pub mod stream;
 pub mod value;
 
@@ -24,7 +25,7 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 
 pub use contract::{Contract, ContractError, Kind, SiteInfo};
-pub use stream::{DecodeError, Decoder, Event, Record, Session};
+pub use stream::{Crash, DecodeError, Decoder, Event, Record, Session};
 pub use value::Value;
 
 /// Output format.
@@ -81,6 +82,11 @@ pub(crate) enum Item<'c> {
         ctx: u32,
         count: u32,
     },
+    Crash {
+        ts_ns: u64,
+        ctx: u32,
+        crash: Crash,
+    },
 }
 
 impl Item<'_> {
@@ -89,7 +95,8 @@ impl Item<'_> {
             Item::Record(r) => r.ts_ns,
             Item::SpanOpen { ts_ns, .. }
             | Item::SpanClose { ts_ns, .. }
-            | Item::Dropped { ts_ns, .. } => *ts_ns,
+            | Item::Dropped { ts_ns, .. }
+            | Item::Crash { ts_ns, .. } => *ts_ns,
         }
     }
 }
@@ -106,12 +113,15 @@ pub struct Decoded {
     pub contexts: usize,
     /// Set when decoding stopped early; the output holds what came before.
     pub error: Option<DecodeError>,
+    /// The crash record, when the stream is a crash dump.
+    pub crash: Option<Crash>,
 }
 
 const RESET: &str = "\x1b[0m";
 const DIM: &str = "\x1b[2m";
 const CYAN: &str = "\x1b[36m";
 const MAGENTA: &str = "\x1b[35m";
+const RED_BOLD: &str = "\x1b[1;31m";
 
 fn level_color(level: rtlog::Level) -> &'static str {
     match level {
@@ -152,6 +162,115 @@ fn human_ns(ns: u64) -> String {
         10_000..=9_999_999 => format!("{:.1} µs", ns as f64 / 1e3),
         10_000_000..=9_999_999_999 => format!("{:.2} ms", ns as f64 / 1e6),
         _ => format!("{:.3} s", ns as f64 / 1e9),
+    }
+}
+
+/// Renders timeline items as text lines, one item at a time. Shared by the
+/// whole-capture decoder and the live stdout mode.
+pub(crate) struct TextRenderer {
+    paint: Painter,
+    spans: bool,
+    mark: &'static str,
+    t0: Option<u64>,
+    pub(crate) names: HashMap<u32, String>,
+    depth: HashMap<u32, usize>,
+    open: HashMap<u64, (u64, String)>,
+}
+
+impl TextRenderer {
+    /// `t0`: the timestamp shown as zero; `None` takes the first item's.
+    pub(crate) fn new(color: bool, spans: bool, mismatched: bool, t0: Option<u64>) -> Self {
+        TextRenderer {
+            paint: Painter { on: color },
+            spans,
+            mark: if mismatched { "?" } else { "" },
+            t0,
+            names: HashMap::new(),
+            depth: HashMap::new(),
+            open: HashMap::new(),
+        }
+    }
+
+    fn prefix(&mut self, ts_ns: u64, ctx: u32) -> String {
+        let t0 = *self.t0.get_or_insert(ts_ns);
+        let name = self
+            .names
+            .get(&ctx)
+            .cloned()
+            .unwrap_or_else(|| format!("ctx{ctx}"));
+        format!(
+            "{} {}",
+            self.paint.paint(DIM, &stamp(ts_ns, t0)),
+            self.paint.paint(CYAN, &format!("[{name}]"))
+        )
+    }
+
+    /// The text line for `item`, if it has one.
+    pub(crate) fn render(&mut self, item: &Item<'_>) -> Option<String> {
+        let p = Painter { on: self.paint.on };
+        Some(match item {
+            Item::Record(r) => {
+                let d = self.depth.get(&r.ctx).copied().unwrap_or(0);
+                let level = format!("{:<5}", r.site.level.as_str().to_ascii_uppercase());
+                format!(
+                    "{} {} {}{}{}",
+                    self.prefix(r.ts_ns, r.ctx),
+                    p.paint(level_color(r.site.level), &level),
+                    "  ".repeat(d),
+                    self.mark,
+                    render::format(&r.site.fmt, &r.args),
+                )
+            }
+            Item::SpanOpen {
+                ts_ns,
+                ctx,
+                id,
+                name,
+                ..
+            } => {
+                let prefix = self.prefix(*ts_ns, *ctx);
+                let d = self.depth.entry(*ctx).or_insert(0);
+                let indent = "  ".repeat(*d);
+                *d += 1;
+                self.open.insert(*id, (*ts_ns, (*name).to_owned()));
+                if !self.spans {
+                    return None;
+                }
+                format!(
+                    "{prefix} {} {indent}{}",
+                    p.paint(MAGENTA, "SPAN "),
+                    p.paint(MAGENTA, &format!("▶ {name}"))
+                )
+            }
+            Item::SpanClose { ts_ns, ctx, id } => {
+                let (start, name) = self.open.remove(id)?;
+                let d = self.depth.entry(*ctx).or_insert(1);
+                *d = d.saturating_sub(1);
+                let indent = "  ".repeat(*d);
+                if !self.spans {
+                    return None;
+                }
+                format!(
+                    "{} {} {indent}{} {}",
+                    self.prefix(*ts_ns, *ctx),
+                    p.paint(MAGENTA, "SPAN "),
+                    p.paint(MAGENTA, &format!("◀ {name}")),
+                    p.paint(DIM, &human_ns(ts_ns.saturating_sub(start))),
+                )
+            }
+            Item::Dropped { ts_ns, ctx, count } => format!(
+                "{} {} {}",
+                self.prefix(*ts_ns, *ctx),
+                p.paint(RED_BOLD, "DROP "),
+                p.paint(RED_BOLD, &format!("{count} frames dropped")),
+            ),
+            Item::Crash { ts_ns, ctx, crash } => format!(
+                "{} {} {}",
+                self.prefix(*ts_ns, *ctx),
+                p.paint(RED_BOLD, if crash.kind == 3 { "SNAP " } else { "CRASH" }),
+                p.paint(RED_BOLD, &crash.describe()),
+            ),
+        })
     }
 }
 
@@ -223,7 +342,11 @@ pub fn decode_with(
                 let ts_ns = last_ts.get(&ctx).copied().unwrap_or(0);
                 items.push(Item::Dropped { ts_ns, ctx, count });
             }
-            Ok(Event::CtxClose { .. }) => {}
+            Ok(Event::Crash { ts_ns, ctx, crash }) => {
+                result.crash = Some(crash.clone());
+                items.push(Item::Crash { ts_ns, ctx, crash });
+            }
+            Ok(Event::CtxClose { .. } | Event::CtxTime { .. }) => {}
             Err(e) => result.error = Some(e),
         }
     }
@@ -297,84 +420,25 @@ pub fn decode_with(
                         });
                         writeln!(result.text, "{line}").unwrap();
                     }
+                    Item::Crash { ts_ns, ctx, crash } => {
+                        let line = serde_json::json!({
+                            "type": "crash", "ts_ns": ts_ns, "ctx": ctx, "ctx_name": name_of(*ctx),
+                            "kind": match crash.kind { 1 => "panic", 2 => "signal", 3 => "snapshot", _ => "unknown" },
+                            "signal": crash.signal, "code": crash.code, "addr": crash.addr, "pc": crash.pc,
+                            "message": crash.message, "description": crash.describe(),
+                        });
+                        writeln!(result.text, "{line}").unwrap();
+                    }
                 }
             }
         }
         Output::Text => {
-            let p = Painter { on: opts.color };
-            let mark = if mismatched { "?" } else { "" };
-            let mut depth: HashMap<u32, usize> = HashMap::new();
-            let mut open: HashMap<u64, (u64, &str)> = HashMap::new();
+            let mut r = TextRenderer::new(opts.color, opts.spans, mismatched, Some(t0));
+            r.names = names.clone();
             for item in &items {
-                match item {
-                    Item::Record(r) => {
-                        let d = depth.get(&r.ctx).copied().unwrap_or(0);
-                        let level = format!("{:<5}", r.site.level.as_str().to_ascii_uppercase());
-                        writeln!(
-                            result.text,
-                            "{} {} {} {}{mark}{}",
-                            p.paint(DIM, &stamp(r.ts_ns, t0)),
-                            p.paint(CYAN, &format!("[{}]", name_of(r.ctx))),
-                            p.paint(level_color(r.site.level), &level),
-                            "  ".repeat(d),
-                            render::format(&r.site.fmt, &r.args),
-                        )
-                        .unwrap();
-                    }
-                    Item::SpanOpen {
-                        ts_ns,
-                        ctx,
-                        id,
-                        name,
-                        ..
-                    } => {
-                        let d = depth.entry(*ctx).or_insert(0);
-                        open.insert(*id, (*ts_ns, name));
-                        if opts.spans {
-                            writeln!(
-                                result.text,
-                                "{} {} {} {}{}",
-                                p.paint(DIM, &stamp(*ts_ns, t0)),
-                                p.paint(CYAN, &format!("[{}]", name_of(*ctx))),
-                                p.paint(MAGENTA, "SPAN "),
-                                "  ".repeat(*d),
-                                p.paint(MAGENTA, &format!("▶ {name}")),
-                            )
-                            .unwrap();
-                        }
-                        *d += 1;
-                    }
-                    Item::SpanClose { ts_ns, ctx, id } => {
-                        let Some((start, name)) = open.remove(id) else {
-                            continue;
-                        };
-                        let d = depth.entry(*ctx).or_insert(1);
-                        *d = d.saturating_sub(1);
-                        if opts.spans {
-                            writeln!(
-                                result.text,
-                                "{} {} {} {}{} {}",
-                                p.paint(DIM, &stamp(*ts_ns, t0)),
-                                p.paint(CYAN, &format!("[{}]", name_of(*ctx))),
-                                p.paint(MAGENTA, "SPAN "),
-                                "  ".repeat(*d),
-                                p.paint(MAGENTA, &format!("◀ {name}")),
-                                p.paint(DIM, &human_ns(ts_ns - start)),
-                            )
-                            .unwrap();
-                        }
-                    }
-                    Item::Dropped { ts_ns, ctx, count } => {
-                        writeln!(
-                            result.text,
-                            "{} {} {} {}",
-                            p.paint(DIM, &stamp(*ts_ns, t0)),
-                            p.paint(CYAN, &format!("[{}]", name_of(*ctx))),
-                            p.paint("\x1b[1;31m", "DROP "),
-                            p.paint("\x1b[1;31m", &format!("{count} frames dropped")),
-                        )
-                        .unwrap();
-                    }
+                if let Some(line) = r.render(item) {
+                    result.text.push_str(&line);
+                    result.text.push('\n');
                 }
             }
         }
