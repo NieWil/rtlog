@@ -9,19 +9,21 @@ The [`timing`](../examples/timing.rs) example measures each workload in 2 000 ba
 CI runs it on an x86-64 runner and on an arm64 runner, and posts the table on the job's summary page: [`timing report (x86_64)` / `timing report (aarch64)`](https://github.com/NieWil/rtlog/actions/workflows/ci.yml).
 
 <!-- timing-table -->
-The latest x86-64 figures, measured on the development VM (Xeon @ 2.8 GHz base, 3.26 GHz measured):
+Measured by CI on GitHub-hosted runners (release build). Each CI run republishes these numbers.
 
-| Workload | p50 | p50 cycles |
+| Workload | x86-64: AMD EPYC 9V74, 3.60 GHz measured | aarch64: 3.39 GHz measured |
 | --- | ---: | ---: |
-| Timestamp read (TSC) | 12.8 ns | 42 |
-| W1: `info!("x={} y={}", u32, u32)` | 39.0 ns | 127 |
-| W2: 6 mixed fields | 24.2 ns | 79 |
-| W3: 32-byte string | 24.9 ns | 81 |
-| Disabled call | 0.5 ns | 2 |
-| Baseline: timestamped `writeln!` into a buffer | 108.9 ns | 356 |
+| Timestamp read (TSC / `CNTVCT_EL0`) | 9.7 ns · 35 cycles | 13.4 ns · 46 cycles |
+| W1: `info!("x={} y={}", u32, u32)` | **14.9 ns · 53 cycles** | **18.6 ns · 63 cycles** |
+| W2: 6 mixed fields | 14.9 ns · 54 cycles | 19.0 ns · 65 cycles |
+| W3: 32-byte string | 14.3 ns · 51 cycles | 18.5 ns · 63 cycles |
+| Disabled call | 0.4 ns · 1 cycle | 0.5 ns · 2 cycles |
+| W5: 8 threads at once, per thread | 44.6 ns | 31.7 ns |
+| Baseline: timestamped `writeln!` into a buffer | 73.2 ns · 263 cycles | 87.0 ns · 295 cycles |
+| Ring + drain throughput, one thread | 36.7 M frames/s | 34.0 M frames/s |
 <!-- /timing-table -->
 
-The spec's budget is ≤ 50 cycles per W1 call on x86-64 and aarch64; v0.1 doesn't meet it yet. A third of the cost is the timestamp read; the rest is the thread-local lookup and a copy through a stack buffer. Both are the next optimisation targets.
+A log call costs about 5× less than formatting the same line. The spec's budget is ≤ 50 cycles per W1 call: v0.1 is 3 cycles over it on x86-64 and 13 over on aarch64. Two-thirds of the cost is the timestamp read itself; the rest is the thread-local lookup and a copy through a stack buffer, which are the next optimisation targets. Shared VMs vary from run to run; on the development VM, W1 measured 79–127 cycles.
 
 ## Size on a microcontroller
 

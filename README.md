@@ -13,7 +13,7 @@ You write `println!`-style log lines. The device writes a few binary bytes into 
 
 ## Why
 
-- **Cheap on the device.** On Cortex-M4F, 10 log messages take 3.1 KB of flash with rtlog against 16.8 KB with `core::fmt`. A disabled call costs under a nanosecond. [Numbers →](docs/performance.md)
+- **Cheap on the device.** A log call takes about 15 ns (53 cycles) on x86-64, about 5× less than formatting the line. On Cortex-M4F, 10 messages take 3.1 KB of flash against 16.8 KB with `core::fmt`. [Numbers →](docs/performance.md)
 - **Never in the way.** Each thread or task owns its ring. A full ring drops and counts; it never blocks an ISR or a control loop.
 - **More than text.** Spans, typed fields and per-thread timelines export straight to Perfetto. [See a real app traced →](docs/use-cases/perfetto.md)
 - **One format everywhere.** Rust (`no_std` and `std`), C, C++ and Zephyr all write the same stream and use the same decoder.

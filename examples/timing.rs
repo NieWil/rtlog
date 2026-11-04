@@ -123,6 +123,32 @@ fn core_ghz() -> Option<f64> {
 
 fn cpu_model() -> String {
     if let Ok(info) = std::fs::read_to_string("/proc/cpuinfo") {
+        let field = |key: &str| {
+            info.lines()
+                .find(|l| l.split(':').next().is_some_and(|k| k.trim() == key))
+                .and_then(|l| l.split_once(':'))
+                .map(|(_, v)| v.trim().to_owned())
+        };
+        // Arm cores report implementer / part IDs instead of a model name.
+        if let (Some(imp), Some(part)) = (field("CPU implementer"), field("CPU part")) {
+            let name = match (imp.as_str(), part.as_str()) {
+                ("0x41", "0xd0c") => "Arm Neoverse N1",
+                ("0x41", "0xd40") => "Arm Neoverse V1",
+                ("0x41", "0xd49") => "Arm Neoverse N2",
+                ("0x41", "0xd4f") => "Arm Neoverse V2",
+                ("0x41", "0xd8e") => "Arm Neoverse N3",
+                ("0x41", "0xd0b") => "Arm Cortex-A76",
+                ("0x41", "0xd08") => "Arm Cortex-A72",
+                ("0x41", "0xd03") => "Arm Cortex-A53",
+                ("0x61", _) => "Apple silicon",
+                _ => "",
+            };
+            return if name.is_empty() {
+                format!("Arm core (implementer {imp}, part {part})")
+            } else {
+                name.to_owned()
+            };
+        }
         for key in ["model name", "Model", "Hardware", "uarch", "isa"] {
             if let Some(v) = info
                 .lines()
