@@ -1,0 +1,107 @@
+name: release
+
+# Builds optimised `rtlog` CLI binaries for every supported host and packages
+# the C/C++ header with the Zephyr module. Pull requests that touch the build
+# run it as a dry run; pushing a `v*` tag publishes a GitHub release.
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - ".github/workflows/release.yml"
+      - "Cargo.toml"
+      - "crates/**"
+      - "c/**"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  cli:
+    name: rtlog CLI (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-musl, os: ubuntu-latest, cross: true }
+          - { target: i686-unknown-linux-musl, os: ubuntu-latest, cross: true }
+          - { target: aarch64-unknown-linux-musl, os: ubuntu-latest, cross: true }
+          - { target: armv7-unknown-linux-musleabihf, os: ubuntu-latest, cross: true }
+          - { target: arm-unknown-linux-musleabihf, os: ubuntu-latest, cross: true }
+          - { target: riscv64gc-unknown-linux-gnu, os: ubuntu-latest, cross: true }
+          - { target: x86_64-apple-darwin, os: macos-latest }
+          - { target: aarch64-apple-darwin, os: macos-latest }
+          - { target: x86_64-pc-windows-msvc, os: windows-latest }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - if: matrix.cross
+        uses: taiki-e/setup-cross-toolchain-action@v1
+        with:
+          target: ${{ matrix.target }}
+      - name: Build (dist profile, fat LTO, stripped)
+        run: cargo build --profile dist -p rtlog-decode --bin rtlog --target ${{ matrix.target }}
+      - name: Smoke test
+        if: matrix.cross || matrix.target == 'aarch64-apple-darwin' || matrix.os == 'windows-latest'
+        shell: bash
+        run: |
+          bin=target/${{ matrix.target }}/dist/rtlog
+          [ -f "$bin.exe" ] && bin="$bin.exe"
+          runner_var="CARGO_TARGET_$(echo '${{ matrix.target }}' | tr 'a-z.-' 'A-Z__')_RUNNER"
+          ${!runner_var:-} "$bin" --help | head -3
+      - name: Package
+        shell: bash
+        run: |
+          name=rtlog-${{ github.ref_type == 'tag' && github.ref_name || 'dev' }}-${{ matrix.target }}
+          mkdir -p "dist/$name"
+          bin=target/${{ matrix.target }}/dist/rtlog
+          [ -f "$bin.exe" ] && bin="$bin.exe"
+          cp "$bin" README.md "dist/$name/"
+          cd dist
+          if [ "${{ runner.os }}" = "Windows" ]; then 7z a "$name.zip" "$name" >/dev/null; else tar czf "$name.tar.gz" "$name"; fi
+          ls -la
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cli-${{ matrix.target }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+
+  c-package:
+    name: C/C++ header and Zephyr module
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Package
+        run: |
+          name=rtlog-c-${{ github.ref_type == 'tag' && github.ref_name || 'dev' }}
+          mkdir -p "dist/$name"
+          cp -r c/include c/examples c/zephyr zephyr docs/c-cpp.md docs/zephyr.md "dist/$name/"
+          tar czf "dist/$name.tar.gz" -C dist "$name"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: c-package
+          path: dist/*.tar.gz
+
+  publish:
+    name: publish GitHub release
+    if: github.ref_type == 'tag'
+    needs: [cli, c-package]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - run: cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

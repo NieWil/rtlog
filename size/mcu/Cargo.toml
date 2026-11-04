@@ -1,0 +1,28 @@
+# Size probe: a minimal Cortex-M4 firmware in several variants, built only to
+# measure flash and RAM. It is not part of the host workspace and never runs.
+[package]
+name = "rtlog-size-mcu"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[features]
+# Exactly one of these is enabled per build (see scripts/size_report.sh).
+baseline = []
+rtlog1 = ["dep:rtlog-core"]
+rtlog10 = ["dep:rtlog-core"]
+fmt10 = []
+
+[dependencies]
+cortex-m-rt = "0.7"
+panic-halt = "1"
+rtlog-core = { path = "../../crates/rtlog-core", default-features = false, optional = true }
+
+[profile.release]
+opt-level = "s"
+lto = "fat"
+codegen-units = 1
+debug = false
+panic = "abort"

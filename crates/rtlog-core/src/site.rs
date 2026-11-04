@@ -19,17 +19,24 @@ pub enum SiteKind {
 }
 
 /// One log call site or span site.
+///
+/// `repr(C)` with a fixed field order, so host tools can read descriptors
+/// straight out of a firmware image (`rtlog contract --elf`): `id: u32`,
+/// `kind: u8`, `level: u8`, `nargs: u8`, one reserved byte, `line: u32`,
+/// `column: u32`, then `module`, `file` and `fmt` as (pointer, length) pairs.
 #[derive(Debug)]
+#[repr(C)]
 pub struct Site {
     pub id: u32,
     pub kind: SiteKind,
     pub level: Level,
-    pub module: &'static str,
-    pub file: &'static str,
+    pub nargs: u8,
+    _reserved: u8,
     pub line: u32,
     pub column: u32,
+    pub module: &'static str,
+    pub file: &'static str,
     pub fmt: &'static str,
-    pub nargs: u8,
 }
 
 impl Site {
@@ -46,6 +53,7 @@ impl Site {
         Site {
             id: site_id(level, module, file, line, column, fmt, nargs),
             kind: SiteKind::Log,
+            _reserved: 0,
             level,
             module,
             file,
@@ -74,6 +82,7 @@ impl Site {
                 id
             },
             kind: SiteKind::Span,
+            _reserved: 0,
             level: Level::Info,
             module,
             file,
@@ -189,6 +198,22 @@ mod tests {
         assert_ne!(base, site_id(Level::Info, "m", "f.rs", 1, 2, "x={}", 1));
         assert_ne!(base, site_id(Level::Info, "m", "f.rs", 1, 1, "y={}", 1));
         assert!(base < CONTROL_BASE);
+    }
+
+    #[test]
+    fn descriptor_layout_is_what_host_tools_read() {
+        let w = core::mem::size_of::<usize>();
+        assert_eq!(core::mem::size_of::<Site>(), 16 + 6 * w);
+        assert_eq!(core::mem::align_of::<Site>(), w.max(4));
+        let s = Site::new(Level::Warn, "m", "f.rs", 7, 9, "x={}", 1);
+        let base = &s as *const Site as usize;
+        assert_eq!(&s.kind as *const _ as usize - base, 4);
+        assert_eq!(&s.line as *const _ as usize - base, 8);
+        assert_eq!(&s.module as *const _ as usize - base, 16);
+        assert_eq!(&s.fmt as *const _ as usize - base, 16 + 4 * w);
+        // A `&str` is (pointer, length) in that order.
+        let words: [usize; 2] = unsafe { core::mem::transmute::<&str, [usize; 2]>(s.fmt) };
+        assert_eq!((words[0], words[1]), (s.fmt.as_ptr() as usize, 4));
     }
 
     #[test]

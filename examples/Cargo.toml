@@ -23,3 +23,7 @@ path = "timing.rs"
 [[example]]
 name = "app_trace"
 path = "app_trace.rs"
+
+[[example]]
+name = "perfetto_quickstart"
+path = "perfetto_quickstart.rs"

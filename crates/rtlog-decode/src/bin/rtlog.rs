@@ -4,6 +4,7 @@
 //! rtlog decode --contract app.contract.jsonl [--out text|json|perfetto] [-o FILE]
 //!              [--color auto|always|never] [--no-spans] [--force] app.rtlog
 //! rtlog check  app.contract.jsonl
+//! rtlog contract --elf firmware.elf -o firmware.contract.jsonl
 //! ```
 
 use std::io::{IsTerminal, Write};
@@ -15,9 +16,15 @@ const USAGE: &str = "usage:
   rtlog decode --contract <contract.jsonl> [--out text|json|perfetto] [-o <file>]
                [--color auto|always|never] [--no-spans] [--force] <stream.rtlog>
   rtlog check <contract.jsonl>
+  rtlog contract --elf <binary> [-o <contract.jsonl>]
 
   --json and --perfetto are short for --out json and --out perfetto.
   Perfetto output opens in https://ui.perfetto.dev (Open trace file).";
+
+/// Write to stdout; a closed pipe (`| head`) ends output quietly instead of panicking.
+fn write_stdout(s: &str) {
+    let _ = std::io::stdout().lock().write_all(s.as_bytes());
+}
 
 fn load_contract(path: &str) -> Result<Contract, String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
@@ -94,7 +101,35 @@ fn run(args: &[String]) -> Result<(), String> {
         Some("check") => {
             let path = args.get(1).ok_or(USAGE)?;
             let c = load_contract(path)?;
-            println!(
+            write_stdout(&format!(
+                "{path}: {} sites, contract hash {:#010x}\n",
+                c.len(),
+                c.hash()
+            ));
+            Ok(())
+        }
+        Some("contract") => {
+            let mut elf = None;
+            let mut out_file = None;
+            let mut it = args[1..].iter();
+            while let Some(a) = it.next() {
+                match a.as_str() {
+                    "--elf" => elf = it.next().cloned(),
+                    "-o" | "--output" => out_file = it.next().cloned(),
+                    s => return Err(format!("unknown argument {s}\n{USAGE}")),
+                }
+            }
+            let path = elf.ok_or(USAGE)?;
+            let data = std::fs::read(&path).map_err(|e| format!("{path}: {e}"))?;
+            let jsonl =
+                rtlog_decode::elf::contract_from_elf(&data).map_err(|e| format!("{path}: {e}"))?;
+            let c = Contract::from_jsonl(&jsonl)
+                .map_err(|e| format!("{path}: extracted contract is invalid: {e}"))?;
+            match out_file {
+                Some(o) => std::fs::write(&o, &jsonl).map_err(|e| format!("{o}: {e}"))?,
+                None => write_stdout(&jsonl),
+            }
+            eprintln!(
                 "{path}: {} sites, contract hash {:#010x}",
                 c.len(),
                 c.hash()
@@ -102,7 +137,7 @@ fn run(args: &[String]) -> Result<(), String> {
             Ok(())
         }
         Some("-h" | "--help" | "help") => {
-            println!("{USAGE}");
+            write_stdout(&format!("{USAGE}\n"));
             Ok(())
         }
         _ => Err(USAGE.to_owned()),

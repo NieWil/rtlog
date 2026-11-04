@@ -14,6 +14,7 @@
 //! ```
 
 pub mod contract;
+pub mod elf;
 mod perfetto;
 pub mod render;
 pub mod stream;

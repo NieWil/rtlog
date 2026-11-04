@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="330" viewBox="0 0 880 330" font-family="ui-sans-serif, -apple-system, Segoe UI, Helvetica, Arial, sans-serif" role="img" aria-label="Threads write into their own rings; a drain sends frames to the host, which decodes them to text, JSON or Perfetto">
+  <style>
+    .card{fill:#0d1117} .box{fill:#161b22;stroke:#30363d} .lbl{fill:#c9d1d9;font-size:13px} .sub{fill:#8b949e;font-size:11px}
+    .hdr{fill:#8b949e;font-size:11px;letter-spacing:.12em}
+    .ring{fill:#0d1117;stroke:#f0883e} .fill{fill:#f0883e}
+    .f1{animation:fill1 6s infinite} .f2{animation:fill2 6s infinite} .f3{animation:fill3 6s infinite}
+    @keyframes fill1{0%{width:6px}40%{width:70px}55%,100%{width:6px}}
+    @keyframes fill2{0%{width:20px}30%{width:58px}60%{width:10px}100%{width:20px}}
+    @keyframes fill3{0%{width:40px}20%{width:76px}45%{width:8px}100%{width:40px}}
+    .drain{fill:#f0883e22;stroke:#f0883e} .host{fill:#23863622;stroke:#3fb950} .out{fill:#161b22;stroke:#3fb950}
+    .path{stroke:#30363d;stroke-width:2;fill:none}
+    .pk{fill:#f0883e}
+    .a1{animation:toDrain1 3s linear infinite} .a2{animation:toDrain2 3s linear infinite 1s} .a3{animation:toDrain3 3s linear infinite 2s}
+    @keyframes toDrain1{0%{transform:translate(0,0);opacity:0}10%{opacity:1}45%{transform:translate(118px,62px);opacity:1}50%,100%{transform:translate(118px,62px);opacity:0}}
+    @keyframes toDrain2{0%{transform:translate(0,0);opacity:0}10%{opacity:1}45%{transform:translate(118px,0);opacity:1}50%,100%{transform:translate(118px,0);opacity:0}}
+    @keyframes toDrain3{0%{transform:translate(0,0);opacity:0}10%{opacity:1}45%{transform:translate(118px,-62px);opacity:1}50%,100%{transform:translate(118px,-62px);opacity:0}}
+    .w1{animation:wire 1.5s linear infinite} .w2{animation:wire 1.5s linear infinite .5s} .w3{animation:wire 1.5s linear infinite 1s}
+    @keyframes wire{0%{transform:translateX(0);opacity:0}10%,90%{opacity:1}100%{transform:translateX(186px);opacity:0}}
+    @media (prefers-reduced-motion: reduce){.f1,.f2,.f3,.a1,.a2,.a3,.w1,.w2,.w3{animation:none}}
+  </style>
+  <rect class="card" width="880" height="330" rx="14"/>
+  <text class="hdr" x="40" y="34">TARGET · MCU, LINUX, DESKTOP</text>
+  <text class="hdr" x="600" y="34">HOST</text>
+
+  <!-- threads and rings -->
+  <g>
+    <rect class="box" x="30" y="58" width="112" height="44" rx="8"/><text class="lbl" x="86" y="85" text-anchor="middle">control loop</text>
+    <rect class="box" x="30" y="120" width="112" height="44" rx="8"/><text class="lbl" x="86" y="147" text-anchor="middle">worker</text>
+    <rect class="box" x="30" y="182" width="112" height="44" rx="8"/><text class="lbl" x="86" y="209" text-anchor="middle">ISR</text>
+    <rect class="ring" x="160" y="68" width="84" height="24" rx="5"/><rect class="fill f1" x="164" y="72" width="6" height="16" rx="3"/>
+    <rect class="ring" x="160" y="130" width="84" height="24" rx="5"/><rect class="fill f2" x="164" y="134" width="20" height="16" rx="3"/>
+    <rect class="ring" x="160" y="192" width="84" height="24" rx="5"/><rect class="fill f3" x="164" y="196" width="40" height="16" rx="3"/>
+    <text class="sub" x="202" y="246" text-anchor="middle">one lock-free ring each</text>
+  </g>
+  <!-- to drain -->
+  <path class="path" d="M244 80 C300 80 300 142 362 142"/>
+  <path class="path" d="M244 142 L362 142"/>
+  <path class="path" d="M244 204 C300 204 300 142 362 142"/>
+  <circle class="pk a1" cx="244" cy="80" r="5"/>
+  <circle class="pk a2" cx="244" cy="142" r="5"/>
+  <circle class="pk a3" cx="244" cy="204" r="5"/>
+  <rect class="drain" x="362" y="118" width="92" height="48" rx="24"/><text class="lbl" x="408" y="146" text-anchor="middle">drain</text>
+  <text class="sub" x="408" y="186" text-anchor="middle">idle loop or thread</text>
+
+  <!-- wire -->
+  <path class="path" d="M454 142 L640 142" stroke-dasharray="5 5"/>
+  <circle class="pk w1" cx="454" cy="142" r="4"/><circle class="pk w2" cx="454" cy="142" r="4"/><circle class="pk w3" cx="454" cy="142" r="4"/>
+  <text class="sub" x="547" y="128" text-anchor="middle">UART · RTT · file · socket</text>
+  <text class="sub" x="547" y="164" text-anchor="middle">18 B per record</text>
+
+  <!-- host -->
+  <rect class="host" x="640" y="112" width="104" height="60" rx="10"/><text class="lbl" x="692" y="139" text-anchor="middle">rtlog decode</text><text class="sub" x="692" y="157" text-anchor="middle">+ contract</text>
+  <path class="path" d="M744 130 C770 130 770 76 792 76"/><path class="path" d="M744 142 L792 142"/><path class="path" d="M744 154 C770 154 770 208 792 208"/>
+  <rect class="out" x="792" y="58" width="70" height="36" rx="8"/><text class="lbl" x="827" y="81" text-anchor="middle">text</text>
+  <rect class="out" x="792" y="124" width="70" height="36" rx="8"/><text class="lbl" x="827" y="147" text-anchor="middle">JSON</text>
+  <rect class="out" x="792" y="190" width="70" height="36" rx="8"/><text class="lbl" x="827" y="213" text-anchor="middle">Perfetto</text>
+
+  <text class="sub" x="440" y="300" text-anchor="middle">The stream carries IDs and raw values only: the host supplies the format strings from the contract.</text>
+</svg>

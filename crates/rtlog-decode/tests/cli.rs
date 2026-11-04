@@ -2,6 +2,26 @@ mod common;
 
 use std::process::Command;
 
+/// The CLI binary, launched through the target runner (QEMU) when the tests
+/// themselves run under one, as in cross-architecture CI.
+fn rtlog_cmd() -> Command {
+    let bin = env!("CARGO_BIN_EXE_rtlog");
+    let runner = std::env::vars()
+        .find(|(k, v)| {
+            k.starts_with("CARGO_TARGET_") && k.ends_with("_RUNNER") && !v.trim().is_empty()
+        })
+        .map(|(_, v)| v);
+    match runner {
+        Some(r) => {
+            let mut parts = r.split_whitespace();
+            let mut c = Command::new(parts.next().unwrap());
+            c.args(parts).arg(bin);
+            c
+        }
+        None => Command::new(bin),
+    }
+}
+
 #[test]
 fn cli_decodes_files_and_checks_contracts() {
     rtlog::info!("cli speed={} ok={}", 1200u16, true);
@@ -14,8 +34,7 @@ fn cli_decodes_files_and_checks_contracts() {
     rtlog::contract::write(&contract).unwrap();
     std::fs::write(&stream, &bytes).unwrap();
 
-    let bin = env!("CARGO_BIN_EXE_rtlog");
-    let out = Command::new(bin)
+    let out = rtlog_cmd()
         .arg("decode")
         .arg("--contract")
         .arg(&contract)
@@ -30,7 +49,7 @@ fn cli_decodes_files_and_checks_contracts() {
     let text = String::from_utf8(out.stdout).unwrap();
     assert!(text.contains("INFO  cli speed=1200 ok=true"), "{text}");
 
-    let out = Command::new(bin)
+    let out = rtlog_cmd()
         .args(["decode", "--json", "--contract"])
         .arg(&contract)
         .arg(&stream)
@@ -40,17 +59,13 @@ fn cli_decodes_files_and_checks_contracts() {
         serde_json::from_slice(out.stdout.split(|&b| b == b'\n').next().unwrap()).unwrap();
     assert_eq!(v["message"], "cli speed=1200 ok=true");
 
-    let out = Command::new(bin)
-        .arg("check")
-        .arg(&contract)
-        .output()
-        .unwrap();
+    let out = rtlog_cmd().arg("check").arg(&contract).output().unwrap();
     assert!(out.status.success());
     assert!(String::from_utf8_lossy(&out.stdout).contains("contract hash"));
 
-    let out = Command::new(bin).arg("bogus").output().unwrap();
+    let out = rtlog_cmd().arg("bogus").output().unwrap();
     assert!(!out.status.success());
-    let out = Command::new(bin)
+    let out = rtlog_cmd()
         .args(["decode", "--contract"])
         .arg(&contract)
         .arg(dir.join("missing"))

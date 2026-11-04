@@ -1,0 +1,38 @@
+config RTLOG
+	bool "rtlog deferred binary logging and tracing"
+	depends on ARCH_HAS_THREAD_LOCAL_STORAGE
+	select THREAD_LOCAL_STORAGE
+	help
+	  Lock-free, allocation-free binary logging (RTLOG_INFO, spans) with
+	  format strings decoded on the host by the rtlog CLI.
+
+if RTLOG
+
+config RTLOG_MAX_THREADS
+	int "Threads that can log at the same time"
+	default 8
+
+config RTLOG_RING_SIZE
+	int "Ring size per thread in bytes (power of two)"
+	default 2048
+
+config RTLOG_DRAIN_THREAD
+	bool "Run a low-priority drain thread"
+	default y
+
+config RTLOG_DRAIN_PERIOD_MS
+	int "Drain period in milliseconds"
+	default 10
+	depends on RTLOG_DRAIN_THREAD
+
+config RTLOG_DRAIN_PRIORITY
+	int "Drain thread priority"
+	default 14
+	depends on RTLOG_DRAIN_THREAD
+
+config RTLOG_DRAIN_STACK_SIZE
+	int "Drain thread stack size"
+	default 1024
+	depends on RTLOG_DRAIN_THREAD
+
+endif

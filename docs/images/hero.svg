@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="400" viewBox="0 0 880 400" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" role="img" aria-label="You write println-style log calls; the device writes a few binary bytes; you read text on the host">
+  <style>
+    .card{fill:#0d1117} .panel{fill:#161b22;stroke:#30363d} .title{fill:#8b949e;font-size:12px}
+    .code{font-size:14px;fill:#c9d1d9} .kw{fill:#d2a8ff} .str{fill:#a5d6ff} .num{fill:#79c0ff}
+    .term{font-size:13.5px;fill:#c9d1d9} .ts{fill:#6e7681} .ctx{fill:#56d4dd} .info{fill:#56d364} .warn{fill:#e3b341} .err{fill:#ff7b72;font-weight:bold}
+    .badge{fill:#1f6feb22;stroke:#1f6feb88} .btxt{font-size:12.5px;fill:#c9d1d9}
+    .wire{stroke:#30363d;stroke-width:2;stroke-dasharray:4 5}
+    .pkt rect{fill:#f0883e} .pkt text{font-size:10px;fill:#0d1117;font-weight:bold}
+    .l1,.l2,.l3,.t1,.t2,.t3{opacity:0}
+    .l1{animation:show 9s infinite 0.2s} .l2{animation:show 9s infinite 0.9s} .l3{animation:show 9s infinite 1.6s}
+    .t1{animation:show 9s infinite 3.2s} .t2{animation:show 9s infinite 3.9s} .t3{animation:show 9s infinite 4.6s}
+    .p1{animation:fly 9s infinite 2.2s} .p2{animation:fly 9s infinite 2.9s} .p3{animation:fly 9s infinite 3.6s}
+    .pkt{opacity:0}
+    @keyframes show{0%{opacity:0;transform:translateX(-6px)}4%{opacity:1;transform:none}80%{opacity:1}88%,100%{opacity:0}}
+    @keyframes fly{0%{opacity:0;transform:translate(0,0)}3%{opacity:1}14%{opacity:1;transform:translate(0,92px)}17%,100%{opacity:0;transform:translate(0,92px)}}
+    @media (prefers-reduced-motion: reduce){.l1,.l2,.l3,.t1,.t2,.t3{animation:none;opacity:1}.pkt{display:none}}
+  </style>
+  <rect class="card" width="880" height="400" rx="14"/>
+
+  <!-- code -->
+  <rect class="panel" x="20" y="20" width="840" height="118" rx="8"/>
+  <text class="title" x="36" y="42">src/motor.rs: what you write</text>
+  <g class="l1"><text class="code" x="36" y="70"><tspan class="kw">rtlog::info!</tspan>(<tspan class="str">"motor speed={} rpm"</tspan>, rpm);</text></g>
+  <g class="l2"><text class="code" x="36" y="94"><tspan class="kw">rtlog::warn!</tspan>(<tspan class="str">"temp={} limit={}"</tspan>, temp, <tspan class="num">85u8</tspan>);</text></g>
+  <g class="l3"><text class="code" x="36" y="118"><tspan class="kw">let</tspan> _s = <tspan class="kw">rtlog::span!</tspan>(<tspan class="str">"pid.update"</tspan>);</text></g>
+
+  <!-- wire -->
+  <line class="wire" x1="140" y1="140" x2="140" y2="236"/>
+  <line class="wire" x1="440" y1="140" x2="440" y2="236"/>
+  <line class="wire" x1="740" y1="140" x2="740" y2="236"/>
+  <text class="title" x="160" y="186">on the wire: 18 bytes per record; on the device: no formatting, no lock, no allocation</text>
+  <g class="pkt p1"><rect x="112" y="146" width="56" height="18" rx="4"/><text x="117" y="159">7a 3f 01…</text></g>
+  <g class="pkt p2"><rect x="412" y="146" width="56" height="18" rx="4"/><text x="417" y="159">c4 10 02…</text></g>
+  <g class="pkt p3"><rect x="712" y="146" width="56" height="18" rx="4"/><text x="717" y="159">ff 04 01…</text></g>
+
+  <!-- terminal -->
+  <rect class="panel" x="20" y="238" width="840" height="112" rx="8"/>
+  <text class="title" x="36" y="260">$ rtlog decode: what you read</text>
+  <g class="t1"><text class="term" x="36" y="286"><tspan class="ts">0.000412 </tspan><tspan class="ctx">[motor] </tspan><tspan class="info">INFO  </tspan>motor speed=1200 rpm</text></g>
+  <g class="t2"><text class="term" x="36" y="310"><tspan class="ts">0.000431 </tspan><tspan class="ctx">[motor] </tspan><tspan class="warn">WARN  </tspan>temp=81 limit=85</text></g>
+  <g class="t3"><text class="term" x="36" y="334"><tspan class="ts">0.000433 </tspan><tspan class="ctx">[motor] </tspan><tspan style="fill:#d2a8ff">SPAN  ▶ pid.update</tspan></text></g>
+
+  <!-- badges -->
+  <rect class="badge" x="20" y="362" width="200" height="26" rx="13"/><text class="btxt" x="120" y="380" text-anchor="middle">lock-free · no alloc</text>
+  <rect class="badge" x="232" y="362" width="200" height="26" rx="13"/><text class="btxt" x="332" y="380" text-anchor="middle">Cortex-M → desktop</text>
+  <rect class="badge" x="444" y="362" width="200" height="26" rx="13"/><text class="btxt" x="544" y="380" text-anchor="middle">Rust · C · C++ · Zephyr</text>
+  <rect class="badge" x="656" y="362" width="204" height="26" rx="13"/><text class="btxt" x="758" y="380" text-anchor="middle">text · JSON · Perfetto</text>
+</svg>

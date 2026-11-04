@@ -138,32 +138,40 @@ macro_rules! log {
             $crate::site::count_placeholders($fmt) == __N,
             "rtlog: placeholder count does not match the number of arguments"
         );
+        // The ID is a compile-time constant: the call never reads its
+        // descriptor, which on bare metal may live in a non-loaded section.
+        const __SITE: $crate::Site = $crate::Site::new(
+            $lvl,
+            ::core::module_path!(),
+            ::core::file!(),
+            ::core::line!(),
+            ::core::column!(),
+            $fmt,
+            $crate::__private::nargs(__N),
+        );
         #[$crate::__private::linkme::distributed_slice($crate::site::SITES)]
         #[linkme(crate = $crate::__private::linkme)]
-        static __RTLOG_SITE: $crate::Site = $crate::Site::new(
-            $lvl, ::core::module_path!(), ::core::file!(), ::core::line!(), ::core::column!(),
-            $fmt, $crate::__private::nargs(__N),
-        );
-        &__RTLOG_SITE
+        static __RTLOG_SITE: $crate::Site = __SITE;
+        __SITE.id
     }};
     (to: $p:expr, $lvl:expr, $fmt:literal $(, $arg:expr)* $(,)?) => {{
-        let __site: &'static $crate::Site =
+        let __id: u32 =
             $crate::log!(@site $lvl, $fmt, <[()]>::len(&[$($crate::__unit!($arg)),*]));
         if $crate::enabled($lvl) {
             let mut __buf = $crate::__private::args_buf();
             let mut __w = $crate::Writer::new_uninit(&mut __buf);
             $( $crate::Log::write(&$arg, &mut __w); )*
-            $crate::__private::push_to($p, __site.id, &__w);
+            $crate::__private::push_to($p, __id, &__w);
         }
     }};
     ($lvl:expr, $fmt:literal $(, $arg:expr)* $(,)?) => {{
-        let __site: &'static $crate::Site =
+        let __id: u32 =
             $crate::log!(@site $lvl, $fmt, <[()]>::len(&[$($crate::__unit!($arg)),*]));
         if $crate::enabled($lvl) {
             let mut __buf = $crate::__private::args_buf();
             let mut __w = $crate::Writer::new_uninit(&mut __buf);
             $( $crate::Log::write(&$arg, &mut __w); )*
-            $crate::__private::push_local(__site.id, &__w);
+            $crate::__private::push_local(__id, &__w);
         }
     }};
 }
@@ -176,16 +184,17 @@ macro_rules! __span_site {
             $crate::site::count_placeholders($name) == 0,
             "rtlog: a span name takes no placeholders"
         );
-        #[$crate::__private::linkme::distributed_slice($crate::site::SITES)]
-        #[linkme(crate = $crate::__private::linkme)]
-        static __RTLOG_SPAN: $crate::Site = $crate::Site::span(
+        const __SITE: $crate::Site = $crate::Site::span(
             ::core::module_path!(),
             ::core::file!(),
             ::core::line!(),
             ::core::column!(),
             $name,
         );
-        &__RTLOG_SPAN
+        #[$crate::__private::linkme::distributed_slice($crate::site::SITES)]
+        #[linkme(crate = $crate::__private::linkme)]
+        static __RTLOG_SPAN: $crate::Site = __SITE;
+        __SITE.id
     }};
 }
 
@@ -210,12 +219,12 @@ macro_rules! __span_site {
 #[macro_export]
 macro_rules! span {
     (to: $p:expr, $name:literal) => {{
-        let __s: &'static $crate::Site = $crate::__span_site!($name);
-        $crate::Producer::span_enter($p, __s.id)
+        let __id: u32 = $crate::__span_site!($name);
+        $crate::Producer::span_enter($p, __id)
     }};
     ($name:literal) => {{
-        let __s: &'static $crate::Site = $crate::__span_site!($name);
-        $crate::__private::span_enter(__s.id)
+        let __id: u32 = $crate::__span_site!($name);
+        $crate::__private::span_enter(__id)
     }};
 }
 
