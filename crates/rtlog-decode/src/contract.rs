@@ -13,10 +13,18 @@ pub const MAX_NARGS: u8 = 32;
 /// Largest format string accepted.
 pub const MAX_FMT: usize = 65_535;
 
+/// Whether a site is a log call or a span.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kind {
+    Log,
+    Span,
+}
+
 /// One site as read from the contract.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SiteInfo {
     pub id: u32,
+    pub kind: Kind,
     pub level: Level,
     pub module: String,
     pub file: String,
@@ -36,6 +44,8 @@ struct RawSite {
     column: u32,
     fmt: String,
     nargs: u8,
+    #[serde(default)]
+    kind: Option<String>,
 }
 
 /// A validated contract.
@@ -69,6 +79,10 @@ pub enum ContractError {
     FmtTooLong {
         id: u32,
     },
+    BadKind {
+        line: usize,
+        kind: String,
+    },
     PlaceholderMismatch {
         id: u32,
         placeholders: usize,
@@ -92,6 +106,9 @@ impl fmt::Display for ContractError {
             }
             ContractError::FmtTooLong { id } => {
                 write!(f, "site {id:#010x}: format string longer than {MAX_FMT}")
+            }
+            ContractError::BadKind { line, kind } => {
+                write!(f, "line {line}: unknown kind {kind:?}")
             }
             ContractError::PlaceholderMismatch {
                 id,
@@ -146,8 +163,19 @@ impl Contract {
                     nargs: r.nargs,
                 });
             }
+            let kind = match r.kind.as_deref() {
+                None | Some("log") => Kind::Log,
+                Some("span") => Kind::Span,
+                Some(k) => {
+                    return Err(ContractError::BadKind {
+                        line,
+                        kind: k.to_owned(),
+                    })
+                }
+            };
             let site = SiteInfo {
                 id: r.id,
+                kind,
                 level,
                 module: r.module,
                 file: r.file,
@@ -224,6 +252,11 @@ mod tests {
         assert!(matches!(
             Contract::from_jsonl(&many),
             Err(ContractError::TooManyArgs { .. })
+        ));
+        let kind = LINE.replace("\"nargs\":1", "\"nargs\":1,\"kind\":\"blob\"");
+        assert!(matches!(
+            Contract::from_jsonl(&kind),
+            Err(ContractError::BadKind { .. })
         ));
         let mismatch = LINE.replace("\"nargs\":1", "\"nargs\":2");
         assert!(matches!(

@@ -46,13 +46,15 @@ pub use arg::{Log, Tag, Writer};
 pub use clock::set_clock;
 pub use drain::{Full, SliceTransport, Transport};
 pub use level::{enabled, set_level, set_off, Level};
-pub use ring::{Consumer, Producer, Ring, ARGS_CAP, FRAME_MAX};
-pub use site::Site;
+pub use ring::{Consumer, Producer, Ring, SpanId, ARGS_CAP, FRAME_MAX};
+pub use site::{Site, SiteKind};
 
 #[cfg(feature = "std")]
 pub use drain::IoTransport;
 #[cfg(feature = "std")]
-pub use runtime::{set_context_name, spawn_drain, stats, Drain, DrainHandle, Stats, THREAD_RING};
+pub use runtime::{
+    set_context_name, spawn_drain, stats, Drain, DrainHandle, SpanGuard, Stats, THREAD_RING,
+};
 
 #[doc(hidden)]
 pub mod __private {
@@ -61,7 +63,7 @@ pub mod __private {
     pub use linkme;
 
     #[cfg(feature = "std")]
-    pub use crate::runtime::__local_push;
+    pub use crate::runtime::{__local_push, __span_enter as span_enter};
 
     /// Uninitialised argument buffer for one log call.
     #[inline(always)]
@@ -166,6 +168,57 @@ macro_rules! log {
     }};
 }
 
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __span_site {
+    ($name:literal) => {{
+        const _: () = assert!(
+            $crate::site::count_placeholders($name) == 0,
+            "rtlog: a span name takes no placeholders"
+        );
+        #[$crate::__private::linkme::distributed_slice($crate::site::SITES)]
+        #[linkme(crate = $crate::__private::linkme)]
+        static __RTLOG_SPAN: $crate::Site = $crate::Site::span(
+            ::core::module_path!(),
+            ::core::file!(),
+            ::core::line!(),
+            ::core::column!(),
+            $name,
+        );
+        &__RTLOG_SPAN
+    }};
+}
+
+/// Open a span: a named, timed region that the host shows as a slice (for
+/// example in Perfetto), nested under the span that was open when it started.
+///
+/// On `std`, `let _g = rtlog::span!("parse");` returns a guard that closes the
+/// span when dropped. With an explicit producer,
+/// `let s = rtlog::span!(to: &mut p, "parse");` returns a [`SpanId`] that you
+/// close with `p.span_exit(s)`.
+///
+/// ```
+/// fn handle() {
+///     let _req = rtlog::span!("request");
+///     {
+///         let _db = rtlog::span!("db.query");
+///         rtlog::debug!("rows={}", 3u32);
+///     }
+/// }
+/// handle();
+/// ```
+#[macro_export]
+macro_rules! span {
+    (to: $p:expr, $name:literal) => {{
+        let __s: &'static $crate::Site = $crate::__span_site!($name);
+        $crate::Producer::span_enter($p, __s.id)
+    }};
+    ($name:literal) => {{
+        let __s: &'static $crate::Site = $crate::__span_site!($name);
+        $crate::__private::span_enter(__s.id)
+    }};
+}
+
 /// Log at `Trace` level; see [`log!`].
 #[macro_export]
 macro_rules! trace {
@@ -247,6 +300,30 @@ mod tests {
         })
         .join()
         .unwrap();
+    }
+
+    #[test]
+    fn producer_spans_nest_and_restore_parent() {
+        static RING: Ring<1024> = Ring::new();
+        let (mut p, mut c) = RING.split(3).unwrap();
+        let outer = crate::span!(to: &mut p, "outer");
+        let inner = crate::span!(to: &mut p, "inner");
+        assert_eq!(inner.parent, outer.id);
+        assert_eq!(outer.id >> 48, 3);
+        p.span_exit(inner);
+        p.span_exit(outer);
+        let again = crate::span!(to: &mut p, "outer");
+        assert_eq!(again.parent, 0);
+        p.span_exit(again);
+        let mut out = [0u8; FRAME_MAX];
+        let mut n = 0;
+        while c.pop(&mut out).is_some() {
+            n += 1;
+        }
+        assert_eq!(n, 6);
+        assert!(crate::site::sites()
+            .iter()
+            .any(|s| s.kind == crate::SiteKind::Span && s.fmt == "inner"));
     }
 
     #[test]

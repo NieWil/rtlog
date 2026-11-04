@@ -39,7 +39,7 @@ fn conformance_vector_decodes_exactly() {
     assert_eq!(d.error, None);
     assert_eq!(
         d.text,
-        "0.000000 [ctx2] WARN  s=hé\n1.250000 [motor] INFO  a=7 b=-2\n"
+        "0.000000 [ctx2] WARN  s=hé\n1.250000 [motor] INFO  a=7 b=-2\n1.250000 [motor] DROP  4 frames dropped\n"
     );
     assert_eq!((d.records, d.dropped, d.contexts), (2, 4, 1));
 
@@ -53,7 +53,11 @@ fn conformance_vector_decodes_exactly() {
                 .unwrap()
         })
         .collect();
-    assert_eq!(ts, [250_000_000, 1_500_000_000], "JSON keeps absolute time");
+    assert_eq!(
+        ts,
+        [250_000_000, 1_500_000_000, 1_500_000_000],
+        "JSON keeps absolute time (drop report last)"
+    );
 
     let events: Vec<_> = Decoder::new(&c, &vector(&c), false)
         .unwrap()
@@ -78,7 +82,11 @@ fn header_and_contract_mismatch() {
     ));
     let forced = decode(&c, &v, Output::Text, true).unwrap();
     assert!(
-        forced.text.lines().all(|l| l.contains(" ?")),
+        forced
+            .text
+            .lines()
+            .filter(|l| !l.contains(" DROP "))
+            .all(|l| l.contains(" ?")),
         "forced lines are marked: {}",
         forced.text
     );
