@@ -13,8 +13,11 @@ This file tracks how the code in `crates/` matches [the specification](spec.md):
 | 7 SPSC rings, `DropNewest`, clock trait, levels | Built | `ring.rs`, `clock.rs`, `level.rs` |
 | 8 `Transport`, drain scheduling, backpressure | Built | `drain.rs`, `runtime.rs` |
 | 9 Decoder: validation, untrusted parsing, text and JSON lines, CLI | Built | `rtlog-decode` |
+| 5 / 10 Spans: `span_open` / `span_close`, 64-bit IDs, explicit parent | Built (see deviation 13) | `span!`, `Producer::span_enter` |
+| 10 Perfetto / Chrome trace output | Built | `rtlog decode --perfetto`, `rtlog-decode/src/perfetto.rs` |
 | 10c Benchmark model: workloads W1–W5, timing report, Criterion | Built (host only) | `examples/timing.rs`, `benches/` |
-| 5 resync, compression, AEAD; 8b crash log; 10 ecosystem bridges; spans; shared memory | Not yet | — |
+| Verification: soak test, Miri, ThreadSanitizer, AddressSanitizer | Built | `tests/soak.rs`, CI jobs `miri`, `sanitizers`, `soak` |
+| 5 resync, compression, AEAD; 8b crash log; 10 `log` / `tracing` / `defmt` bridges and OTLP / CTF outputs; shared memory | Not yet | — |
 
 ## Deviations from the spec
 
@@ -30,7 +33,10 @@ This file tracks how the code in `crates/` matches [the specification](spec.md):
 10. **Default `std` clock** is the CPU counter: invariant TSC (halved, so the rate fits the header's `u32`) on x86-64, `CNTVCT_EL0` on aarch64, otherwise `Instant`. `RTLOG_CLOCK=instant` forces `Instant`. The TSC rate is calibrated for 20 ms on the first drain.
 11. **Text output shows seconds since the first record** in the stream; JSON keeps absolute `ts_ns`.
 12. **The decoder stops at the first bad frame** and reports its byte offset, since there are no resync frames yet.
+13. **Span frames carry a timestamp delta and context**, like log frames, followed by the spec's payload (span site ID, span ID, parent). Span names are span sites in the contract (`"kind":"span"`), not interned strings. Span IDs are context (16 bits) plus a per-context counter (48 bits). On `std` the parent is the thread's current span; with an explicit producer, `span_enter` / `span_exit` track it.
+14. **Registration does not block the drain.** A thread's first log call registers its ring through a separate pending list, and runtime counters are plain atomics. So a transport may log, call `stats()`, or start threads while the drain is inside `poll`. A regression test covers it.
+15. **Text output shows drops and spans** as `DROP` and `SPAN ▶ / ◀` lines, with span durations. Perfetto output turns numeric fields named in the format string (`err={}`) into counter tracks.
 
 ## Performance status
 
-The CI `timing` job prints the latest numbers to its summary page. On the development VM (x86-64, release build), W1 measured about 38 ns p50 per call, against the spec target of ≤ 15 ns. About 9 ns of that is the TSC read. The disabled-site path costs under 1 ns. Closing the gap is open work: candidates are writing straight into the ring instead of through a stack buffer, and a cheaper thread-local lookup.
+The CI `timing` job prints the latest numbers to its summary page. On the GitHub runner (x86-64, release build), W1 measured 21.6 ns p50 per call against the spec target of ≤ 15 ns; about 13 ns of that is the TSC read. A timestamped `writeln!` into a buffer measured 67.5 ns, and a disabled site 0.4 ns. Closing the gap is open work: candidates are writing straight into the ring instead of through a stack buffer, and a cheaper thread-local lookup.

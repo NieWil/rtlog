@@ -19,9 +19,13 @@ pub fn decode_text(bytes: &[u8]) -> Decoded {
     d
 }
 
-/// Message part of each text line (after the level column).
+/// Message part of each log-record text line (after the level column).
 pub fn messages(d: &Decoded) -> Vec<String> {
     d.text
+        .lines()
+        .filter(|l| !l.contains(" DROP ") && !l.contains(" SPAN "))
+        .collect::<Vec<_>>()
+        .join("\n")
         .lines()
         .map(|l| {
             l.splitn(4, ' ')

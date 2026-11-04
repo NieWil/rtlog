@@ -19,3 +19,7 @@ path = "static_rings.rs"
 [[example]]
 name = "timing"
 path = "timing.rs"
+
+[[example]]
+name = "app_trace"
+path = "app_trace.rs"

@@ -204,3 +204,78 @@ mod tests {
         assert_eq!(format("{}{}", &[Value::Char('é'), Value::F(-0.5)]), "é-0.5");
     }
 }
+
+/// A name for each placeholder of `fmt`, when the format gives one: `{name}`,
+/// or the identifier just before `=` / `:` in `key={}` and `key: {}`.
+///
+/// ```
+/// let n = rtlog_decode::render::arg_names("pid out={:.3} err={} {}");
+/// assert_eq!(n, [Some("out".to_string()), Some("err".to_string()), None]);
+/// ```
+pub fn arg_names(fmt: &str) -> Vec<Option<String>> {
+    let mut names = Vec::new();
+    let b = fmt.as_bytes();
+    let mut lit_start = 0;
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'{' if b.get(i + 1) == Some(&b'{') => i += 2,
+            b'}' if b.get(i + 1) == Some(&b'}') => i += 2,
+            b'{' => {
+                let end = fmt[i..].find('}').map_or(b.len(), |e| i + e);
+                let inner = &fmt[i + 1..end];
+                let named = inner.split(':').next().unwrap_or("");
+                let name = if !named.is_empty()
+                    && named.chars().all(|c| c.is_alphanumeric() || c == '_')
+                {
+                    Some(named.to_owned())
+                } else {
+                    key_before(&fmt[lit_start..i])
+                };
+                names.push(name);
+                i = end + 1;
+                lit_start = i;
+            }
+            _ => i += 1,
+        }
+    }
+    names
+}
+
+fn key_before(lit: &str) -> Option<String> {
+    let t = lit.trim_end();
+    let t = t
+        .strip_suffix('=')
+        .or_else(|| t.strip_suffix(':'))?
+        .trim_end();
+    let key: String = t
+        .chars()
+        .rev()
+        .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '.')
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    (!key.is_empty()).then_some(key)
+}
+
+#[cfg(test)]
+mod name_tests {
+    use super::arg_names;
+
+    fn s(v: &str) -> Option<String> {
+        Some(v.to_owned())
+    }
+
+    #[test]
+    fn names_from_format() {
+        assert_eq!(arg_names("x={} y = {}"), [s("x"), s("y")]);
+        assert_eq!(
+            arg_names("{speed} rpm, temp: {:.1}"),
+            [s("speed"), s("temp")]
+        );
+        assert_eq!(arg_names("motor.err={} {}"), [s("motor.err"), None]);
+        assert_eq!(arg_names("{{x}}={} and {:x}"), [None, None]);
+        assert!(arg_names("no args").is_empty());
+    }
+}

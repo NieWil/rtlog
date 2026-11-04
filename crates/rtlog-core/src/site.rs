@@ -8,10 +8,21 @@ use crate::hash::{fnv1a32, fnv1a_extend};
 use crate::level::Level;
 use crate::wire::CONTROL_BASE;
 
-/// One log call site.
+/// What a site describes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum SiteKind {
+    /// A log call; `fmt` is its format string.
+    Log = 0,
+    /// A span; `fmt` is its name.
+    Span = 1,
+}
+
+/// One log call site or span site.
 #[derive(Debug)]
 pub struct Site {
     pub id: u32,
+    pub kind: SiteKind,
     pub level: Level,
     pub module: &'static str,
     pub file: &'static str,
@@ -34,6 +45,7 @@ impl Site {
     ) -> Site {
         Site {
             id: site_id(level, module, file, line, column, fmt, nargs),
+            kind: SiteKind::Log,
             level,
             module,
             file,
@@ -41,6 +53,34 @@ impl Site {
             column,
             fmt,
             nargs,
+        }
+    }
+}
+
+impl Site {
+    /// Build a span site; `name` is shown as the slice name on the host.
+    pub const fn span(
+        module: &'static str,
+        file: &'static str,
+        line: u32,
+        column: u32,
+        name: &'static str,
+    ) -> Site {
+        let id = site_id(Level::Info, module, file, line, column, name, 0) ^ 0x5a5a_0000;
+        Site {
+            id: if id >= CONTROL_BASE {
+                id ^ 0x8000_0000
+            } else {
+                id
+            },
+            kind: SiteKind::Span,
+            level: Level::Info,
+            module,
+            file,
+            line,
+            column,
+            fmt: name,
+            nargs: 0,
         }
     }
 }

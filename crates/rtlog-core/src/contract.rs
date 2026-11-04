@@ -37,7 +37,11 @@ pub fn site_json(s: &Site) -> String {
         s.column
     ));
     push_json_str(&mut o, s.fmt);
-    o.push_str(&std::format!(",\"nargs\":{}}}", s.nargs));
+    o.push_str(&std::format!(",\"nargs\":{}", s.nargs));
+    if s.kind == crate::site::SiteKind::Span {
+        o.push_str(",\"kind\":\"span\"");
+    }
+    o.push('}');
     o
 }
 

@@ -85,6 +85,8 @@ impl<const N: usize> Ring<N> {
         Some((
             Producer {
                 ring: self,
+                span_seq: 0,
+                current_span: 0,
                 _not_sync: PhantomData,
             },
             Consumer {
@@ -231,7 +233,19 @@ impl<const N: usize> Ring<N> {
 /// `Send` but not `Sync`: it can move to the task that uses it, never be shared.
 pub struct Producer<'a, const N: usize> {
     ring: &'a Ring<N>,
+    span_seq: u64,
+    current_span: u64,
     _not_sync: PhantomData<Cell<()>>,
+}
+
+/// An open span on a [`Producer`]; pass it back to [`Producer::span_exit`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[must_use = "close the span with span_exit"]
+pub struct SpanId {
+    /// Span ID; 0 if the open frame was dropped.
+    pub id: u64,
+    /// The span that was current when this one opened.
+    pub parent: u64,
 }
 
 impl<'a, const N: usize> Producer<'a, N> {
@@ -247,6 +261,28 @@ impl<'a, const N: usize> Producer<'a, N> {
     pub fn push_at(&mut self, site: u32, ts: u64, args: &[u8]) -> bool {
         // SAFETY: as above.
         unsafe { self.ring.push_raw(site, ts, args) }
+    }
+
+    /// Open a span named by span site `site`, nested in the current one.
+    pub fn span_enter(&mut self, site: u32) -> SpanId {
+        self.span_seq += 1;
+        let id = (u64::from(self.ring.ctx() & 0xffff) << 48) | (self.span_seq & 0xffff_ffff_ffff);
+        let parent = self.current_span;
+        let payload = crate::wire::span_open_payload(site, id, parent);
+        if self.push(crate::wire::CTRL_SPAN_OPEN, &payload) {
+            self.current_span = id;
+            SpanId { id, parent }
+        } else {
+            SpanId { id: 0, parent }
+        }
+    }
+
+    /// Close a span opened by [`span_enter`](Self::span_enter).
+    pub fn span_exit(&mut self, span: SpanId) {
+        if span.id != 0 {
+            self.push(crate::wire::CTRL_SPAN_CLOSE, &span.id.to_le_bytes());
+            self.current_span = span.parent;
+        }
     }
 
     /// Count a frame as dropped without writing it.
@@ -360,7 +396,7 @@ mod tests {
         let ring = Ring::<128>::new();
         let (mut p, mut c) = ring.split(2).unwrap();
         let mut out = [0u8; FRAME_MAX];
-        for i in 0..10_000u32 {
+        for i in 0..if cfg!(miri) { 600u32 } else { 10_000 } {
             let args = i.to_le_bytes();
             assert!(p.push_at(i, u64::from(i), &args[..(i as usize % 4) + 1]));
             let n = c.pop(&mut out).unwrap();
@@ -406,7 +442,7 @@ mod tests {
         use std::sync::Arc;
         let ring: Arc<Ring<1024>> = Arc::new(Ring::new());
         ring.mark_split(1);
-        const COUNT: u32 = 200_000;
+        const COUNT: u32 = if cfg!(miri) { 2_000 } else { 200_000 };
         let r = ring.clone();
         let producer = std::thread::spawn(move || {
             let mut sent = 0;

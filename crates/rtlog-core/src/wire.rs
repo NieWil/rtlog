@@ -19,6 +19,20 @@ pub const CTRL_DROPPED: u32 = CONTROL_BASE + 1;
 pub const CTRL_CTX_REGISTER: u32 = CONTROL_BASE + 2;
 /// Payload: ctx varint.
 pub const CTRL_CTX_CLOSE: u32 = CONTROL_BASE + 3;
+/// Timed like a log frame (ts delta, ctx), then: u32 span site ID, u64 span ID,
+/// u64 parent span ID (0 = root).
+pub const CTRL_SPAN_OPEN: u32 = CONTROL_BASE + 4;
+/// Timed like a log frame (ts delta, ctx), then: u64 span ID.
+pub const CTRL_SPAN_CLOSE: u32 = CONTROL_BASE + 5;
+
+/// Encode a `span_open` payload.
+pub fn span_open_payload(site: u32, id: u64, parent: u64) -> [u8; 20] {
+    let mut b = [0u8; 20];
+    b[..4].copy_from_slice(&site.to_le_bytes());
+    b[4..12].copy_from_slice(&id.to_le_bytes());
+    b[12..].copy_from_slice(&parent.to_le_bytes());
+    b
+}
 
 /// Stream header, sent once at the start of a stream.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
