@@ -7,6 +7,7 @@
 - Stdout mode: `rtlog_decode::stdout::init()` prints decoded text as the program runs, level from `RTLOG`.
 - CI runs once per commit: pull requests on `pull_request` only, `main` on `push`; a new push cancels the run it replaces. The release dry run on pull requests only runs when a manifest or the release workflow changes.
 - `scripts/spec_check.py` and the `rtlog-spec-check` skill enforce the spec's real-time, wire, usability, cycle and size rules in CI.
+- Demo package per architecture on the releases page (`rtlog-demo-<version>-<target>`): timing report, Perfetto quickstart, traced app, stdout mode and the CLI, with `run.sh` and a guide to run it on a device and read the results on the host ([docs/demo.md](https://github.com/NieWil/rtlog/blob/main/docs/demo.md)).
 - Specification v0.2.
 
 ## v0.1.0 — first preview

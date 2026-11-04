@@ -65,12 +65,14 @@ Each call site gets an ID at build time; its format string goes into a contract 
 | [C and C++](docs/c-cpp.md) | Header-only producer, build, capture, decode |
 | [Zephyr](docs/zephyr.md) | Module, Kconfig, transports |
 | [Performance and size](docs/performance.md) | Cycles per call, flash and RAM, measuring on your board |
+| [Demo on your device](docs/demo.md) | Prebuilt per architecture: copy to a board, run one script, open the trace on your computer |
 | [Specification](docs/spec.md) · [Implementation notes](docs/implementation.md) | The full design, and where v0.1 stands |
 
 ## Get it
 
 - **CLI** (`rtlog decode`, `rtlog contract`): prebuilt for Linux (x86-64, x86, arm64, ARMv7, ARMv6, RISC-V 64), macOS and Windows on the [releases page](https://github.com/NieWil/rtlog/releases), starting with the first tagged release. Or build it: `cargo install --git https://github.com/NieWil/rtlog rtlog-decode`.
 - **Rust**: `rtlog-core = { git = "https://github.com/NieWil/rtlog" }`.
+- **Demo**: `rtlog-demo-<version>-<target>` on the releases page runs the timing report and a traced app on any of those machines. [How →](docs/demo.md)
 - **C / C++ / Zephyr**: the `rtlog-c` package on the releases page, or [`c/include/rtlog.h`](c/include/rtlog.h) and the [Zephyr module](docs/zephyr.md).
 
 ## Status

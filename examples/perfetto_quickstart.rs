@@ -42,11 +42,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ..Default::default()
     };
     let trace = rtlog_decode::decode_with(&contract, &capture, &opts)?;
-    std::fs::create_dir_all("target")?;
-    std::fs::write("target/quickstart.perfetto.json", &trace.text)?;
+    // Output path: first argument, or target/quickstart.perfetto.json.
+    let out = std::env::args()
+        .nth(1)
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| "target/quickstart.perfetto.json".into());
+    if let Some(dir) = out.parent().filter(|d| !d.as_os_str().is_empty()) {
+        std::fs::create_dir_all(dir)?;
+    }
+    std::fs::write(&out, &trace.text)?;
     println!(
-        "{} records, {} spans from {} threads -> target/quickstart.perfetto.json",
-        trace.records, trace.spans, trace.contexts
+        "{} records, {} spans from {} threads -> {}",
+        trace.records,
+        trace.spans,
+        trace.contexts,
+        out.display()
     );
     println!("open it in https://ui.perfetto.dev");
     Ok(())

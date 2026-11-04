@@ -51,6 +51,10 @@ cargo bench -p rtlog-core --bench log_call          # Criterion, per workload
 RUSTFLAGS="-C target-cpu=native" cargo run --release -p rtlog-examples --example timing
 ```
 
+### Prebuilt demo
+
+The quickest way on a board: download `rtlog-demo-<version>-<target>` from the [releases page](https://github.com/NieWil/rtlog/releases), copy it over and run `./run.sh`. It runs this timing report and a traced app; see [Demo on your device](demo.md).
+
 ### Cross-compiling for an ARM, RISC-V or x86 board
 
 Install the target and a linker, build, copy the binary over and run it there. Timing under QEMU is not meaningful, so run it on the real board.
@@ -95,4 +99,4 @@ The [release workflow](../.github/workflows/release.yml) builds the `rtlog` CLI 
 - macOS on Intel and Apple silicon;
 - Windows.
 
-It also packages the C/C++ header with the Zephyr module. See [Releases](https://github.com/NieWil/rtlog/releases), and [Releasing](releasing.md) for how a release is cut.
+Each host also gets a demo package (`rtlog-demo-<version>-<target>`): the timing, Perfetto quickstart, traced-app and stdout examples with the same profile, a `run.sh` and a [guide](demo.md). It also packages the C/C++ header with the Zephyr module. See [Releases](https://github.com/NieWil/rtlog/releases), and [Releasing](releasing.md) for how a release is cut.
