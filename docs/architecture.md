@@ -60,7 +60,7 @@ sequenceDiagram
 | context | varint, 1–5 B | which thread / task / ISR |
 | arguments | per argument: 1 B type tag + value | integers and floats raw little-endian; strings as length + bytes |
 
-A W1 call (`info!("x={} y={}", u32, u32)`) is 18 bytes on the wire; the same line as text is 33. Control frames announce contexts, report drops and open and close spans. The full grammar, design decisions and threat model are in the [specification](spec.md); what v0.1 implements and where it differs is in the [implementation notes](implementation.md).
+A W1 call (`info!("x={} y={}", u32, u32)`) is 18 bytes on the wire; the same line as text is 33. Control frames announce contexts, report drops and open and close spans. The full grammar, design decisions and threat model are in the [specification](spec.md); what v0.2 implements and where it differs is in the [implementation notes](implementation.md).
 
 ## Guarantees
 

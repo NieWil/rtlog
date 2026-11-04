@@ -11,13 +11,14 @@ static CLOCK_HZ: AtomicU32 = AtomicU32::new(0);
 /// Install a clock returning ticks at `hz` ticks per second.
 pub fn set_clock(now: fn() -> u64, hz: u32) {
     CLOCK_HZ.store(hz, Ordering::Relaxed);
-    CLOCK_FN.store(now as usize, Ordering::Release);
+    // Relaxed is enough: the pointer is to code, which needs no synchronisation.
+    CLOCK_FN.store(now as usize, Ordering::Relaxed);
 }
 
 /// Current tick count.
 #[inline(always)]
 pub fn now() -> u64 {
-    let f = CLOCK_FN.load(Ordering::Acquire);
+    let f = CLOCK_FN.load(Ordering::Relaxed);
     if f != 0 {
         // SAFETY: only `set_clock` stores non-zero values, and it stores a `fn() -> u64`.
         let f: fn() -> u64 = unsafe { core::mem::transmute::<usize, fn() -> u64>(f) };
@@ -63,7 +64,11 @@ mod hw {
         Instant,
     }
 
-    static SOURCE: OnceLock<Source> = OnceLock::new();
+    use std::sync::atomic::{AtomicU8, Ordering};
+
+    /// 0 = not chosen yet, 1 = counter, 2 = `Instant`. A relaxed byte load on
+    /// the log path instead of a `OnceLock` (an acquire load on Arm).
+    static SOURCE: AtomicU8 = AtomicU8::new(0);
     static START: OnceLock<Instant> = OnceLock::new();
     static HZ: OnceLock<u32> = OnceLock::new();
 
@@ -138,16 +143,30 @@ mod hw {
     }
 
     /// The source the default clock settled on.
+    #[inline(always)]
     pub fn source() -> Source {
-        *SOURCE.get_or_init(|| {
-            if std::env::var_os("RTLOG_CLOCK").is_some_and(|v| v == "instant")
-                || !counter_available()
-            {
-                Source::Instant
-            } else {
-                Source::Counter
-            }
-        })
+        match SOURCE.load(Ordering::Relaxed) {
+            1 => Source::Counter,
+            2 => Source::Instant,
+            _ => choose_source(),
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn choose_source() -> Source {
+        // Miri cannot execute counter-reading instructions; it uses `Instant`.
+        let s = if cfg!(miri)
+            || std::env::var_os("RTLOG_CLOCK").is_some_and(|v| v == "instant")
+            || !counter_available()
+        {
+            Source::Instant
+        } else {
+            Source::Counter
+        };
+        // Racing first callers compute the same answer, so a plain store is fine.
+        SOURCE.store(if s == Source::Counter { 1 } else { 2 }, Ordering::Relaxed);
+        s
     }
 
     #[inline(always)]

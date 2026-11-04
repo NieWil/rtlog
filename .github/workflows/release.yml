@@ -1,9 +1,11 @@
 name: release
 
-# Builds optimised `rtlog` CLI binaries for every supported host and packages
-# the C/C++ header with the Zephyr module.
+# Builds optimised `rtlog` CLI binaries and the demo package (examples + run
+# script, docs/demo.md) for every supported host, and packages the C/C++
+# header with the Zephyr module.
 #
-# - Pull requests that touch the build: dry run (build and package only).
+# - Pull requests that change this workflow or the workspace manifest: dry run
+#   (build and package only). Code changes are already built and tested by ci.
 # - Actions → release → "Run workflow" with a version such as v0.1.0: builds
 #   from the selected branch, creates that tag and publishes the release.
 # - Pushing a `v*` tag yourself: publishes the release for that tag.
@@ -14,14 +16,19 @@ on:
     paths:
       - ".github/workflows/release.yml"
       - "Cargo.toml"
-      - "crates/**"
-      - "c/**"
+      - "**/Cargo.toml"
+      - "scripts/demo/**"
+      - "docs/demo.md"
   workflow_dispatch:
     inputs:
       version:
         description: "Version to publish, e.g. v0.1.0. Creates this tag on the selected branch. Leave empty for a dry run."
         required: false
         default: ""
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: write
@@ -84,6 +91,38 @@ jobs:
           [ -f "$bin.exe" ] && bin="$bin.exe"
           runner_var="CARGO_TARGET_$(echo '${{ matrix.target }}' | tr 'a-z.-' 'A-Z__')_RUNNER"
           ${!runner_var:-} "$bin" --help | head -3
+      - name: Build the demo (examples, dist profile)
+        run: cargo build --profile dist -p rtlog-examples --example timing --example perfetto_quickstart --example app_trace --example stdout_mode --target ${{ matrix.target }}
+      - name: Package the demo
+        shell: bash
+        run: |
+          name=rtlog-demo-${{ env.RELEASE_VERSION }}-${{ matrix.target }}
+          ext=; [ "${{ runner.os }}" = "Windows" ] && ext=.exe
+          mkdir -p "dist/$name/bin"
+          for e in timing perfetto_quickstart app_trace stdout_mode; do
+            cp "target/${{ matrix.target }}/dist/examples/$e$ext" "dist/$name/bin/"
+          done
+          cp "target/${{ matrix.target }}/dist/rtlog$ext" "dist/$name/bin/"
+          cp docs/demo.md "dist/$name/README.md"
+          sed -i.bak 's#](\.\./examples)#](https://github.com/NieWil/rtlog/tree/main/examples)#; s#](performance.md#](https://github.com/NieWil/rtlog/blob/main/docs/performance.md#' "dist/$name/README.md" && rm "dist/$name/README.md.bak"
+          cp scripts/demo/run.sh LICENSE-MIT LICENSE-APACHE "dist/$name/"
+          chmod +x "dist/$name/run.sh"
+      - name: Smoke test the demo
+        shell: bash
+        run: |
+          dir=dist/rtlog-demo-${{ env.RELEASE_VERSION }}-${{ matrix.target }}
+          if [ "${{ matrix.target }}" = x86_64-unknown-linux-musl ] || [ "${{ matrix.target }}" = aarch64-apple-darwin ]; then
+            "$dir/run.sh" "$RUNNER_TEMP/demo"     # the whole demo, natively
+            grep -q "W1 scalar" "$RUNNER_TEMP/demo/timing.md"
+            test -s "$RUNNER_TEMP/demo/app/app.perfetto.json"
+          else
+            ext=; [ "${{ runner.os }}" = "Windows" ] && ext=.exe
+            runner_var="CARGO_TARGET_$(echo '${{ matrix.target }}' | tr 'a-z.-' 'A-Z__')_RUNNER"
+            if [ "${{ matrix.os }}" != macos-latest ] || [ -n "${!runner_var:-}" ]; then
+              ${!runner_var:-} "$dir/bin/perfetto_quickstart$ext" "$RUNNER_TEMP/q.perfetto.json"
+              test -s "$RUNNER_TEMP/q.perfetto.json"
+            fi
+          fi
       - name: Package
         shell: bash
         run: |
@@ -93,7 +132,12 @@ jobs:
           [ -f "$bin.exe" ] && bin="$bin.exe"
           cp "$bin" README.md LICENSE-MIT LICENSE-APACHE "dist/$name/"
           cd dist
-          if [ "${{ runner.os }}" = "Windows" ]; then 7z a "$name.zip" "$name" >/dev/null; else tar czf "$name.tar.gz" "$name"; fi
+          demo=rtlog-demo-${{ env.RELEASE_VERSION }}-${{ matrix.target }}
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            7z a "$name.zip" "$name" >/dev/null; 7z a "$demo.zip" "$demo" >/dev/null
+          else
+            tar czf "$name.tar.gz" "$name"; tar czf "$demo.tar.gz" "$demo"
+          fi
           ls -la
       - uses: actions/upload-artifact@v4
         with:

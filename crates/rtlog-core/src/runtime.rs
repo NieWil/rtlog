@@ -21,23 +21,23 @@ use crate::wire;
 /// Ring size per thread on `std`.
 pub const THREAD_RING: usize = 64 * 1024;
 
-type ThreadRing = Ring<THREAD_RING>;
+pub(crate) type ThreadRing = Ring<THREAD_RING>;
 
 /// State shared between a thread and the drain.
-struct Shared {
-    ring: ThreadRing,
-    name: Mutex<String>,
+pub(crate) struct Shared {
+    pub(crate) ring: ThreadRing,
+    pub(crate) name: Mutex<String>,
     /// Bumped on rename so the drain re-announces the context.
     name_gen: AtomicU32,
 }
 
-struct Entry {
-    shared: Arc<Shared>,
+pub(crate) struct Entry {
+    pub(crate) shared: Arc<Shared>,
     announced_gen: u32,
 }
 
-static PENDING: Mutex<Vec<Entry>> = Mutex::new(Vec::new());
-static REGISTRY: Mutex<Vec<Entry>> = Mutex::new(Vec::new());
+pub(crate) static PENDING: Mutex<Vec<Entry>> = Mutex::new(Vec::new());
+pub(crate) static REGISTRY: Mutex<Vec<Entry>> = Mutex::new(Vec::new());
 static NEXT_CTX: AtomicU32 = AtomicU32::new(1);
 static LIVE_CONTEXTS: AtomicUsize = AtomicUsize::new(0);
 static DROPS: AtomicU64 = AtomicU64::new(0);
@@ -57,12 +57,19 @@ struct Local {
 
 impl Drop for Local {
     fn drop(&mut self) {
+        // Detach the fast path first: a log call from a later TLS destructor
+        // takes the slow path and is dropped instead of touching a released ring.
+        let _ = FAST.try_with(|f| f.set(core::ptr::null()));
         self.shared.ring.close();
     }
 }
 
 thread_local! {
     static LOCAL: OnceCell<Local> = const { OnceCell::new() };
+    /// The calling thread's ring, for the log fast path. Const-initialised and
+    /// without a destructor, so reading it is a plain thread-pointer load with
+    /// no lazy-registration check.
+    pub(crate) static FAST: Cell<*const ThreadRing> = const { Cell::new(core::ptr::null()) };
 }
 
 fn new_local() -> Local {
@@ -100,12 +107,34 @@ fn push(l: &Local, site: u32, now: u64, payload: &[u8]) -> bool {
     ok
 }
 
-/// Push a frame into the calling thread's ring. Used by the log macros.
+/// Emit a frame into the calling thread's ring. Used by the log macros.
 #[doc(hidden)]
-#[inline]
-pub fn __local_push(site: u32, args: &[u8]) {
-    let now = crate::clock::now();
-    let _ = LOCAL.try_with(|l| push(l.get_or_init(new_local), site, now, args));
+#[inline(always)]
+pub fn __local_emit<F: FnOnce(&mut crate::Writer<'_>)>(site: u32, encode: F) {
+    let ring = FAST.with(Cell::get);
+    let ring = if ring.is_null() { attach() } else { ring };
+    if ring.is_null() {
+        return; // thread is shutting down
+    }
+    // SAFETY: `FAST` points at this thread's own ring, kept alive by `LOCAL`
+    // (and by the registry until the drain retires it after the thread exits);
+    // only this thread pushes into it.
+    if !unsafe { (*ring).emit(site, encode) } {
+        DROPS.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// Slow path of the first log call on a thread: create and register its ring.
+#[cold]
+#[inline(never)]
+fn attach() -> *const ThreadRing {
+    LOCAL
+        .try_with(|l| {
+            let ring: *const ThreadRing = &l.get_or_init(new_local).shared.ring;
+            FAST.with(|f| f.set(ring));
+            ring
+        })
+        .unwrap_or(core::ptr::null())
 }
 
 /// Name the calling thread's context. A rename after the first log line is

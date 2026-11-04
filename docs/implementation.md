@@ -1,4 +1,4 @@
-# Implementation notes — v0.1
+# Implementation notes — v0.2
 
 This file tracks how the code in `crates/` matches [the specification](spec.md): what is built, where it deviates, and what is left.
 
@@ -18,14 +18,15 @@ This file tracks how the code in `crates/` matches [the specification](spec.md):
 | 10c Benchmark model: workloads W1–W5, timing report, Criterion | Built (host only) | `examples/timing.rs`, `benches/` |
 | Verification: soak test, Miri, ThreadSanitizer, AddressSanitizer | Built | `tests/soak.rs`, CI jobs `miri`, `sanitizers`, `soak` |
 | 4 Contract from the image (`cargo rtlog contract`) | Built as `rtlog contract --elf`, for Rust and C descriptors, PIE relocations applied | `rtlog-decode/src/elf.rs` |
+| 8b Debug stdout, crash log (Unix; C on POSIX) | Built | `rtlog_decode::stdout`, `rtlog::crash`, `rtlog_crash_install` |
 | C / C++ producer, Zephyr module | Built (Zephyr not CI-built) | `c/include/rtlog.h`, `c/zephyr`, `zephyr/module.yml` |
 | 10c Benchmarks in cycles, size on Cortex-M4F | Built | `examples/timing.rs`, `size/mcu`, `scripts/size_report.py` |
-| 5 resync, compression, AEAD; 8b crash log; 10 `log` / `tracing` / `defmt` bridges and OTLP / CTF outputs; shared memory | Not yet | — |
+| 5 resync, compression, AEAD; 8b MCU crash capture; 10 `log` / `tracing` / `defmt` bridges and OTLP / CTF outputs; shared memory; contract stripping | Not yet | — |
 
 ## Deviations from the spec
 
 1. **Argument types travel on the wire.** Each argument is one tag byte plus its value, and the contract records the argument count (`nargs`) instead of the type list. A `macro_rules!` macro cannot see argument types at expansion time, and a `static` cannot depend on them. The site ID therefore hashes module, file, line, column, format string, level and `nargs`. Cost: one byte per argument.
-2. **The contract comes from the binary's descriptors.** Sites are collected with `linkme` into a link section. `rtlog::contract::write(path)` writes the JSON-lines file at runtime (`std`), and `rtlog contract --elf <image>` reads the same descriptors from any ELF image, firmware included. Stripping them (`cargo rtlog verify`) is not built yet, so **format strings are still present in v0.1 binaries** and threat V2 is open.
+2. **The contract comes from the binary's descriptors.** Sites are collected with `linkme` into a link section. `rtlog::contract::write(path)` writes the JSON-lines file at runtime (`std`), and `rtlog contract --elf <image>` reads the same descriptors from any ELF image, firmware included. Stripping them (`cargo rtlog verify`) is not built yet, so **format strings are still present in v0.2 binaries** and threat V2 is open.
 3. **Not yet in the argument model:** `#[derive(Log)]`, `intern!`, `{:display}` / `{:debug}` (tier 4), and `#[rtlog(redact)]`.
 4. **Dynamic strings and byte slices are capped at 127 bytes.** The length byte uses bit 7 as the truncation flag, so the spec's `{:str<256>}` override cannot be encoded. Truncation keeps strings on a UTF-8 boundary.
 5. **Ring frames carry a 2-byte length prefix inside the ring** so the drain always hands whole frames to the transport. It never goes on the wire. Only `DropNewest` is implemented.
@@ -44,4 +45,4 @@ This file tracks how the code in `crates/` matches [the specification](spec.md):
 
 ## Performance status
 
-Budgets are now in cycles (spec section 10c): ≤ 50 cycles per W1 call on x86-64 and aarch64. The CI `timing` jobs (x86-64 and arm64 runners) report ns and cycles, with a measured core clock; see [Performance and size](performance.md). v0.1 does not meet the budget yet: about a third of the cost is the timestamp read, and the rest is the thread-local lookup and a copy through a stack buffer.
+The spec's budgets (section 10c) are enforced in CI by `scripts/spec_check.py`: ≤ 50 cycles per W1 call (x86-64 and aarch64 runners) and, on Cortex-M4F, ≤ 2560 bytes of fixed runtime code and ≤ 64 bytes per call site. The current figures are on the CI job pages and in [Performance and size](performance.md). On hosts the log call encodes its frame in place in the ring (82 instructions for W1 on x86-64); most of the remaining cost is the timestamp read itself (`rdtsc`, `CNTVCT_EL0`).

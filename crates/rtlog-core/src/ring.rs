@@ -10,7 +10,26 @@ use core::marker::PhantomData;
 use core::ptr;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 
+use crate::arg::Writer;
 use crate::varint;
+
+/// Write `v` as a varint at `p`; returns the position after it. One or two
+/// bytes (deltas under 16 384 ticks) take a branch-light path.
+///
+/// SAFETY: `p` must be valid for `varint::MAX_U64` bytes of writes.
+#[inline(always)]
+unsafe fn put_varint(p: *mut u8, v: u64) -> *mut u8 {
+    if v < 0x80 {
+        *p = v as u8;
+        p.add(1)
+    } else if v < 0x4000 {
+        ptr::write_unaligned(p.cast::<[u8; 2]>(), [(v as u8) | 0x80, (v >> 7) as u8]);
+        p.add(2)
+    } else {
+        let n = varint::encode(v, core::slice::from_raw_parts_mut(p, varint::MAX_U64));
+        p.add(n)
+    }
+}
 
 /// Maximum argument bytes in one frame.
 pub const ARGS_CAP: usize = 240;
@@ -33,6 +52,8 @@ pub struct Ring<const N: usize> {
     closed: AtomicBool,
     /// Producer-only: timestamp of the last committed frame.
     last_ts: UnsafeCell<u64>,
+    /// The context ID, varint-encoded once at split time: bytes, then length.
+    ctx_enc: UnsafeCell<[u8; 8]>,
 }
 
 // SAFETY: the producer side (`head`, `last_ts`, writes to free space) and the
@@ -67,6 +88,8 @@ impl<const N: usize> Ring<N> {
             split: AtomicBool::new(false),
             closed: AtomicBool::new(false),
             last_ts: UnsafeCell::new(0),
+            // All-zero so a `static` ring stays in .bss; set at split time.
+            ctx_enc: UnsafeCell::new([0; 8]),
         }
     }
 
@@ -81,7 +104,7 @@ impl<const N: usize> Ring<N> {
         if self.split.swap(true, Ordering::AcqRel) {
             return None;
         }
-        self.ctx.store(ctx, Ordering::Relaxed);
+        self.set_ctx(ctx);
         Some((
             Producer {
                 ring: self,
@@ -94,6 +117,17 @@ impl<const N: usize> Ring<N> {
                 _not_sync: PhantomData,
             },
         ))
+    }
+
+    /// Store the context ID and its varint encoding. Called once, before the
+    /// producer exists, so the producer reads both without synchronisation.
+    fn set_ctx(&self, ctx: u32) {
+        self.ctx.store(ctx, Ordering::Relaxed);
+        let mut enc = [0u8; 8];
+        let n = varint::encode(u64::from(ctx), &mut enc[..7]);
+        enc[7] = n as u8;
+        // SAFETY: no producer exists yet (split / mark_split run before it).
+        unsafe { *self.ctx_enc.get() = enc };
     }
 
     /// Context ID this ring was split with.
@@ -125,7 +159,7 @@ impl<const N: usize> Ring<N> {
     #[cfg_attr(not(feature = "std"), allow(dead_code))]
     pub(crate) fn mark_split(&self, ctx: u32) {
         self.split.store(true, Ordering::Relaxed);
-        self.ctx.store(ctx, Ordering::Relaxed);
+        self.set_ctx(ctx);
     }
 
     /// Mark the ring closed: its context is gone and it will get no new frames.
@@ -167,6 +201,131 @@ impl<const N: usize> Ring<N> {
         if first < dst.len() {
             ptr::copy_nonoverlapping(self.base(), dst.as_mut_ptr().add(first), dst.len() - first);
         }
+    }
+
+    /// Append one frame whose arguments `encode` writes straight into the ring.
+    ///
+    /// Fast path: when a worst-case frame fits contiguously before the wrap
+    /// point, the header and arguments are written in place and published with
+    /// one release store: no intermediate buffer, no `memcpy` call for scalar
+    /// arguments. Otherwise the arguments go through a stack buffer and
+    /// [`push_raw`](Self::push_raw), which handles the wrap. Returns `false`
+    /// and counts a drop when the frame does not fit.
+    ///
+    /// Only the argument encoding is generic, so only it is repeated at each
+    /// call site; `begin` and `finish` are shared (and out of line on bare
+    /// metal, where code size matters more than a call).
+    ///
+    /// SAFETY: the caller must be the ring's only producer.
+    #[inline(always)]
+    pub(crate) unsafe fn emit<F: FnOnce(&mut Writer<'_>)>(&self, site: u32, encode: F) -> bool {
+        #[cfg(not(target_os = "none"))]
+        {
+            let mut buf = crate::__private::args_buf();
+            let (mut w, slot, ts) = self.begin(site, &mut buf);
+            encode(&mut w);
+            self.finish(site, ts, &w, slot)
+        }
+        // Bare metal: code size matters more than one small copy. Encode into
+        // a stack buffer here, then one shared, non-generic call stamps and
+        // pushes it, so each call site holds only its argument writes.
+        #[cfg(target_os = "none")]
+        {
+            let mut buf = crate::__private::args_buf();
+            let mut w = Writer::new_uninit(&mut buf);
+            encode(&mut w);
+            self.push_encoded(site, &w)
+        }
+    }
+
+    #[cfg(target_os = "none")]
+    #[inline(never)]
+    unsafe fn push_encoded(&self, site: u32, w: &Writer<'_>) -> bool {
+        if w.overflowed() {
+            self.drops.fetch_add(1, Ordering::Relaxed);
+            return false;
+        }
+        self.push_raw(site, crate::clock::now(), w.as_slice())
+    }
+
+    /// [`emit`](Self::emit) with an explicit timestamp (tests).
+    #[cfg(test)]
+    unsafe fn emit_at<F: FnOnce(&mut Writer<'_>)>(&self, site: u32, ts: u64, encode: F) -> bool {
+        let mut buf = crate::__private::args_buf();
+        let (mut w, slot, _) = self.begin(site, &mut buf);
+        // Re-stamp: rewrite the header's delta for the explicit time.
+        if slot != usize::MAX {
+            let mut p = self.base().add(slot + LEN_PREFIX + 4);
+            p = put_varint(p, ts.saturating_sub(*self.last_ts.get()));
+            let enc = *self.ctx_enc.get();
+            ptr::write_unaligned(p.cast::<[u8; 8]>(), enc);
+            w = Writer::from_raw(p.add(usize::from(enc[7])), ARGS_CAP);
+        }
+        encode(&mut w);
+        self.finish(site, ts, &w, slot)
+    }
+
+    /// Read the clock, reserve room for a frame and write its header; returns
+    /// the argument writer, the slot start (`usize::MAX` when the stack buffer
+    /// is used) and the timestamp.
+    #[cfg_attr(target_os = "none", allow(dead_code))]
+    #[inline(always)]
+    unsafe fn begin<'b>(
+        &self,
+        site: u32,
+        buf: &'b mut [core::mem::MaybeUninit<u8>; ARGS_CAP],
+    ) -> (Writer<'b>, usize, u64) {
+        let ts = crate::clock::now();
+        const RESERVE: usize = LEN_PREFIX + 4 + varint::MAX_U64 + 5 + ARGS_CAP;
+        let head = self.head.load(Ordering::Relaxed);
+        let tail = self.tail.load(Ordering::Acquire);
+        let idx = head & (N - 1);
+        if N - head.wrapping_sub(tail) >= RESERVE && idx + RESERVE <= N {
+            let base = self.base().add(idx);
+            let mut p = base.add(LEN_PREFIX);
+            ptr::write_unaligned(p.cast::<[u8; 4]>(), site.to_le_bytes());
+            p = p.add(4);
+            p = put_varint(p, ts.saturating_sub(*self.last_ts.get()));
+            let enc = *self.ctx_enc.get();
+            ptr::write_unaligned(p.cast::<[u8; 8]>(), enc); // only `enc[7]` bytes count
+            p = p.add(usize::from(enc[7]));
+            (Writer::from_raw(p, ARGS_CAP), idx, ts)
+        } else {
+            (Writer::new_uninit(buf), usize::MAX, ts)
+        }
+    }
+
+    /// Publish the frame started by `begin`, or push it through the slow path.
+    #[cfg_attr(target_os = "none", allow(dead_code))]
+    #[inline(always)]
+    unsafe fn finish(&self, site: u32, ts: u64, w: &Writer<'_>, slot: usize) -> bool {
+        if w.overflowed() {
+            self.drops.fetch_add(1, Ordering::Relaxed);
+            return false;
+        }
+        if slot == usize::MAX {
+            return self.push_slow(site, ts, w.as_slice());
+        }
+        let base = self.base().add(slot);
+        let len = w
+            .as_slice()
+            .as_ptr()
+            .add(w.len())
+            .offset_from(base.add(LEN_PREFIX)) as usize;
+        ptr::write_unaligned(base.cast::<[u8; 2]>(), (len as u16).to_le_bytes());
+        let last = *self.last_ts.get();
+        *self.last_ts.get() = ts.max(last);
+        let head = self.head.load(Ordering::Relaxed);
+        self.head
+            .store(head.wrapping_add(LEN_PREFIX + len), Ordering::Release);
+        true
+    }
+
+    #[cfg_attr(target_os = "none", allow(dead_code))]
+    #[cold]
+    #[inline(never)]
+    unsafe fn push_slow(&self, site: u32, ts: u64, args: &[u8]) -> bool {
+        self.push_raw(site, ts, args)
     }
 
     /// Append one frame. Returns `false` and counts a drop when it does not fit.
@@ -217,6 +376,44 @@ impl<const N: usize> Ring<N> {
         Some(len)
     }
 
+    /// Visit every unread frame without consuming any, oldest first, until `f`
+    /// returns `false`. Read-only: safe next to a running consumer only if that
+    /// consumer cannot move `tail` meanwhile (the crash dump holds the registry
+    /// lock the `std` drain needs). Allocation-free, for use in a signal handler.
+    ///
+    /// SAFETY: no other thread may consume this ring during the call.
+    #[cfg_attr(not(all(feature = "std", unix)), allow(dead_code))]
+    pub(crate) unsafe fn scan(
+        &self,
+        scratch: &mut [u8; FRAME_MAX],
+        mut f: impl FnMut(&[u8]) -> bool,
+    ) {
+        let head = self.head.load(Ordering::Acquire);
+        let mut pos = self.tail.load(Ordering::Acquire);
+        while pos != head {
+            let mut len = [0u8; LEN_PREFIX];
+            self.read_at(pos, &mut len);
+            let len = usize::from(u16::from_le_bytes(len));
+            if len > FRAME_MAX || LEN_PREFIX + len > head.wrapping_sub(pos) {
+                return; // torn by a concurrent writer: stop rather than read garbage
+            }
+            self.read_at(pos.wrapping_add(LEN_PREFIX), &mut scratch[..len]);
+            if !f(&scratch[..len]) {
+                return;
+            }
+            pos = pos.wrapping_add(LEN_PREFIX + len);
+        }
+    }
+
+    /// Timestamp of the newest frame, read without synchronisation. Used only
+    /// to align times in a crash dump, where a stale value is harmless.
+    #[cfg_attr(not(all(feature = "std", unix)), allow(dead_code))]
+    pub(crate) fn last_ts_racy(&self) -> u64 {
+        // SAFETY: a plain aligned u64 read; a torn or stale value only shifts
+        // the times shown in a crash dump.
+        unsafe { ptr::read_volatile(self.last_ts.get()) }
+    }
+
     /// Release the frame returned by the last [`peek_raw`](Self::peek_raw).
     ///
     /// SAFETY: the caller must be the ring's only consumer, and `len` must come
@@ -254,6 +451,14 @@ impl<'a, const N: usize> Producer<'a, N> {
     pub fn push(&mut self, site: u32, args: &[u8]) -> bool {
         // SAFETY: `Producer` is unique per ring and not `Sync`.
         unsafe { self.ring.push_raw(site, crate::clock::now(), args) }
+    }
+
+    /// Append a frame whose arguments `encode` writes in place (used by the log
+    /// macros; see [`Ring::emit`]).
+    #[inline(always)]
+    pub fn emit<F: FnOnce(&mut Writer<'_>)>(&mut self, site: u32, encode: F) -> bool {
+        // SAFETY: `Producer` is unique per ring and not `Sync`.
+        unsafe { self.ring.emit(site, encode) }
     }
 
     /// Append a frame with an explicit timestamp (ticks of the configured clock).
@@ -352,6 +557,46 @@ mod tests {
         let n = c.pop(&mut out).unwrap();
         assert_eq!(decode_meta(&out[..n]), (11, 50, 3, &[3u8][..]));
         assert!(c.pop(&mut out).is_none());
+    }
+
+    #[test]
+    fn emit_writes_in_place_and_falls_back_at_the_wrap() {
+        // 512 B ring: the in-place path needs 261 contiguous bytes, so as the
+        // head moves around the ring both paths run, many times.
+        let ring = Ring::<512>::new();
+        let (mut p, mut c) = ring.split(300).unwrap(); // two-byte ctx varint
+        let mut out = [0u8; FRAME_MAX];
+        let rounds = if cfg!(miri) { 300u32 } else { 20_000 };
+        for i in 0..rounds {
+            let n = (i % 37) as usize;
+            let payload = [i as u8; 40];
+            // A delta of i*50 ticks exercises 1-, 2- and 3-byte varints.
+            let ts = u64::from(i) * u64::from(i) * 50;
+            assert!(unsafe {
+                ring.emit_at(i, ts, |w| {
+                    w.put_array(i.to_le_bytes());
+                    w.put(&payload[..n]);
+                })
+            });
+            let len = c.pop(&mut out).unwrap();
+            let (site, delta, ctx, args) = decode_meta(&out[..len]);
+            assert_eq!(site, i);
+            let prev = u64::from(i.saturating_sub(1)) * u64::from(i.saturating_sub(1)) * 50;
+            assert_eq!(delta, if i == 0 { 0 } else { ts - prev });
+            assert_eq!(ctx, 300);
+            assert_eq!(&args[..4], &i.to_le_bytes());
+            assert_eq!(&args[4..], &payload[..n]);
+        }
+        let _ = &mut p;
+    }
+
+    #[test]
+    fn emit_overflow_counts_a_drop() {
+        let ring = Ring::<1024>::new();
+        let (_p, _c) = ring.split(1).unwrap();
+        let big = [0u8; ARGS_CAP + 1];
+        assert!(!unsafe { ring.emit_at(1, 0, |w| w.put(&big)) });
+        assert_eq!(ring.drops(), 1);
     }
 
     #[test]

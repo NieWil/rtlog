@@ -53,6 +53,60 @@ pub enum Event<'c> {
         ctx: u32,
         count: u32,
     },
+    /// A context's clock was set (crash dumps carry only the tail of a ring).
+    CtxTime {
+        ctx: u32,
+        ticks: u64,
+    },
+    /// The process crashed (or a snapshot was requested); last frame of a dump.
+    Crash {
+        ts_ns: u64,
+        ctx: u32,
+        crash: Crash,
+    },
+}
+
+/// What a crash record says.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Crash {
+    /// 1 = panic, 2 = signal, 3 = snapshot requested by the program.
+    pub kind: u8,
+    pub signal: i32,
+    pub code: i32,
+    /// Faulting address (signals), 0 otherwise.
+    pub addr: u64,
+    /// Program counter at the fault, where the platform reports it.
+    pub pc: u64,
+    pub message: String,
+}
+
+impl Crash {
+    /// One-line description (control characters from the file become spaces).
+    pub fn describe(&self) -> String {
+        let message: String = self
+            .message
+            .chars()
+            .map(|c| if c.is_control() { ' ' } else { c })
+            .collect();
+        let message = &message;
+        match self.kind {
+            1 => format!("panic: {message}"),
+            2 => {
+                let mut s = format!("{message} (signal {}, code {})", self.signal, self.code);
+                // SIGILL 4, SIGBUS 7, SIGFPE 8, SIGSEGV 11: the address means
+                // something (data address, or faulting instruction for FPE/ILL).
+                if matches!(self.signal, 4 | 7 | 8 | 11) {
+                    s.push_str(&format!(" addr={:#x}", self.addr));
+                }
+                if self.pc != 0 {
+                    s.push_str(&format!(" pc={:#x}", self.pc));
+                }
+                s
+            }
+            3 => format!("snapshot: {message}"),
+            k => format!("crash kind {k}: {message}"),
+        }
+    }
 }
 
 /// Why decoding stopped.
@@ -231,6 +285,35 @@ impl<'c> Session<'c> {
                 Event::Dropped {
                     ctx,
                     count: c.u32("count")?,
+                }
+            }
+            wire::CTRL_CTX_TIME => {
+                let ctx = c.ctx()?;
+                let ticks = c.u64("ticks")?;
+                self.clocks.insert(ctx, ticks);
+                Event::CtxTime { ctx, ticks }
+            }
+            wire::CTRL_CRASH => {
+                let (ts_ns, ctx) = self.timed(&mut c)?;
+                let kind = c.take(1, "crash kind")?[0];
+                let signal = c.u32("signal")? as i32;
+                let code = c.u32("signal code")? as i32;
+                let addr = c.u64("fault address")?;
+                let pc = c.u64("program counter")?;
+                let len = c.take(1, "message")?[0];
+                let message = String::from_utf8_lossy(c.take(usize::from(len & 0x7f), "message")?)
+                    .into_owned();
+                Event::Crash {
+                    ts_ns,
+                    ctx,
+                    crash: Crash {
+                        kind,
+                        signal,
+                        code,
+                        addr,
+                        pc,
+                        message,
+                    },
                 }
             }
             wire::CTRL_SPAN_OPEN => {

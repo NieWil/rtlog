@@ -1,6 +1,8 @@
-# Real-Time Deferred Logger — Specification v0.1
+# Real-Time Deferred Logger — Specification v0.2
 
 Nov 2, 2026 · @Niels
+
+v0.2 (Nov 4, 2026) aligns the spec with the implementation released as v0.2.0: the API that exists, how site IDs and contracts are produced, the frame layout, the crash log and the stdout mode, and budgets in cycles and bytes that CI enforces (`scripts/spec_check.py`). What remains planned is marked as such; [implementation notes](implementation.md) track the details.
 
 ## 0. Developer experience and API
 
@@ -20,23 +22,30 @@ A developer writes `rtlog::info!("pid out={} err={}", out, err)` and reads the l
 ```rust
 // Call sites: same shape as println!, every arg implements Log
 rtlog::trace!("...", a, b);  rtlog::debug!  rtlog::info!  rtlog::warn!  rtlog::error!
-rtlog::intern!(name)            // &'static str → u32 ID, zero bytes in the binary
-#[derive(rtlog::Log)]           // structs and enums as typed binary args
+rtlog::info!(to: &mut producer, "...", a);    // explicit producer (no_std, static rings)
+let _s = rtlog::span!("db.query");            // span: a slice in Perfetto, closes on drop
+let s = rtlog::span!(to: &mut producer, "pid.update"); producer.span_exit(s);
 
-// Setup (once)
-rtlog::init(Config { level: Level::Info, overflow: DropNewest, ..Default::default() });
-rtlog::register(&MOTOR_RING, "motor");    // no_std: one static ring per task
-rtlog::isr_ring(&ISR_RING);               // optional, context 0
+// Setup
+static MOTOR: Ring<1024> = Ring::new();       // no_std: one static ring per task
+let (producer, consumer) = MOTOR.split(ctx);  // once; ctx 0 = ISR
+rtlog::set_clock(dwt_cycles, 168_000_000);    // no_std clock; std uses TSC / CNTVCT
+rtlog::set_level(Level::Info);                // runtime level, one atomic store
 
 // Draining: pick one
-rtlog::spawn_drain(transport);            // std: dedicated thread, opt-in
-rtlog::poll(&mut transport);              // call from idle loop / main loop / DMA callback
-rtlog::shm::export("/my-app");        // std: external reader, zero threads in-process
+rtlog::spawn_drain(transport, period);        // std: dedicated thread, opt-in
+rtlog::drain::drain_ring(&mut consumer, &mut transport, &mut scratch); // idle loop / DMA
+rtlog_decode::stdout::init();                 // std: text on stdout, level from RTLOG (section 8b)
 
-// Runtime control
-rtlog::set_level("motor", Level::Debug);  // per-crate mask, one atomic store
-rtlog::stats() -> Stats                   // frames, bytes, drops per context
+// Crash log (section 8b)
+rtlog::crash::install("crash.rtlog");         // panic, SIGSEGV, SIGFPE, SIGBUS, SIGILL, SIGABRT
+rtlog::crash::snapshot("deadlock suspected"); // same dump, without crashing
+
+rtlog::stats() -> Stats                       // frames, bytes, drops, live contexts
+// Planned: intern!, #[derive(Log)], per-crate levels, shm::export
 ```
+
+C and C++ use the same model through `c/include/rtlog.h`: `RTLOG_INFO("x={}", x)`, `RTLOG_SPAN_BEGIN` / `RTLOG_SPAN` (RAII in C++), `rtlog_drain(write, user)`, `rtlog_crash_install(path)`.
 
 **Usage by target**
 
@@ -132,6 +141,7 @@ A site ID is a 32-bit content hash, so the scheme works on every target and obje
 - Including the arg types means a type change at a site yields a new ID; a stale contract can never mis-decode silently.
 - Birthday bound at 32 bits is safe into tens of thousands of sites; 16 bits would collide at \~300.
 - Feature `elf-ids`: the macro emits a zero-size symbol in a dedicated section and the linker-assigned index becomes a `u16` ID. The contract records which scheme a build used.
+- Implemented (v0.1): Rust IDs hash `module | file | line | column | format | level | nargs`; argument types travel on the wire as tags (section 5) instead of in the hash, because a declarative macro cannot see them. C and C++ IDs are the descriptor's index in the `rtlog_sites` section plus one, since C has no compile-time string hashing; the log path does no hashing either way.
 
 **Contract entry** (one JSON line per site)
 
@@ -145,7 +155,7 @@ A site ID is a 32-bit content hash, so the scheme works on every target and obje
 **Generation and merging**
 
 1. The proc-macro emits one `static` descriptor per site (hash, level, crate, file, line, format string, arg schema) into a dedicated link section: `.rtlog.sites` on ELF, `__DATA,__rtlog_sites` on Mach-O, `.rtlog$sites` on PE (the technique `linkme` uses). Derived `Log` types and interned strings emit descriptors into the same section. No files are written at expansion time, so parallel crate builds cannot race.
-2. `cargo rtlog contract <binary>` reads the section with the `object` crate, writes `rtlog.contract.json`, checks hash collisions and ring sizes, then strips the section from the shipped image (`objcopy --remove-section`, or on MCU a linker script placing it in a non-loaded segment). Until stripped, the binary is self-describing.
+2. `rtlog contract --elf <image>` reads the descriptors with the `object` crate (Rust `linkme_SITES`, C `rtlog_sites`; `RELATIVE` relocations applied for position-independent executables), validates them and writes the JSON-lines contract. Implemented. Stripping the section from the shipped image (`objcopy --remove-section`, or on MCU a linker script placing it in a non-loaded segment) is planned; until then the binary is self-describing. Descriptors are `repr(C)` with a fixed layout so this works on any ELF, firmware included.
 3. `cargo rtlog verify <image>` is the release gate: it fails if the image still contains the descriptor section or any contract format string, so strings can never ship by mistake (threat V2). CI runs it on every release artifact.
 4. The merged file is versioned with the firmware; CI archives it with the ELF, keyed by contract hash.
 
@@ -179,10 +189,10 @@ Arguments are written fixed-width so every site has a compile-time maximum frame
 | site\_id | u32 or u16 | per scheme |
 | ts\_delta | varint ≤ 5 B | ticks since previous frame in this ring |
 | ctx | varint ≤ 2 B | context ID (0 = ISR) |
-| args | fixed per contract | raw argument bytes in contract order |
+| args | per argument: 1 B type tag + value | raw little-endian values in call order; tier-3 strings and bytes as length + bytes |
 
-- Frame length is not transmitted; the decoder derives it from the contract plus any embedded length prefixes (section 6).
-- Max frame size per site = header max + sum of max arg sizes; the macro emits it as a `const` so the ring does one `reserve(N)`.
+- Frame length is not transmitted; the decoder reads the contract's argument count and walks the tagged values.
+- On hosts the producer reserves a worst-case slot (header + 240 B of arguments) and, when it fits before the wrap point, encodes the frame in place and publishes it with one release store; otherwise it encodes into a stack buffer and copies across the wrap. On bare metal it always encodes into a stack buffer and calls one shared push, to keep per-call-site code small (section 10c).
 
 **Control frames** (site\_id reserved range `0xFFFF_FF00..`)
 
@@ -192,11 +202,12 @@ Arguments are written fixed-width so every site has a compile-time maximum frame
 | `..01` | dropped | ctx, u32 count of frames dropped since last report |
 | `..02` | ctx\_register | ctx ID, interned name ID |
 | `..03` | ctx\_close | ctx ID |
-| `..04` | span\_open | u64 span ID, u64 parent ID (0 = root), interned name ID |
-| `..05` | span\_close | u64 span ID |
+| `..04` | span\_open | timed like a log frame (ts delta, ctx), then u32 span site ID, u64 span ID, u64 parent ID (0 = root) |
+| `..05` | span\_close | timed like a log frame, then u64 span ID |
 | `..06` | time\_sync | u64 ticks, u64 external time in ns (RTC, GPS, NTP) |
-| `..07` | crash | fault context (section 8b) |
+| `..07` | crash | timed like a log frame, then u8 kind (1 panic, 2 signal, 3 snapshot), i32 signal, i32 code, u64 fault address, u64 pc, message (len + UTF-8); section 8b |
 | `..08` | block\_tag | 16 B AEAD tag for the block that ends here (section 5, security) |
+| `..09` | ctx\_time | ctx, u64 absolute ticks: sets the context's clock, so a crash dump that holds only the tail of a ring still decodes to absolute times |
 
 - The drain emits a resync at least every 64 KiB or 1 s, whichever first, so a corrupted length can never desync the stream for long.
 - Compression (`flags` bit 0): the drain applies NanoLog-style leading-zero stripping per frame, or a block codec such as LZ4 on `std`; the frame grammar above is what the decoder sees after decompression.
@@ -237,7 +248,7 @@ pub enum Schema {
 | --- | --- | --- | --- | --- |
 | 1 Binary | ints, floats, bool, `Option<T>`, arrays, `#[derive(Log)]` structs and enums | raw fields in order; enum = discriminant + variant fields | `MAX_SIZE` const | all targets |
 | 2 Interned | `&'static str` literal, or `intern!(s)` | u32 ID from contract | 4 B | all targets |
-| 3 Dynamic | `{:str}` on `&str`, `{:hex}` on `&[u8]` | `u8 len` + bytes, truncated to cap | default 64 B, `{:str<256>}` to override | all targets |
+| 3 Dynamic | `{:str}` on `&str`, `{:hex}` on `&[u8]` | `u8 len` + bytes, truncated to cap | 127 B (bit 7 of the length byte flags truncation; UTF-8 kept whole) | all targets |
 | 4 Display | `{:display}` / `{:debug}` on any `Display`/`Debug` | formatted into a stack buffer, then tier 3 | same cap | `std` feature only, lint warning |
 
 Rules:
@@ -342,31 +353,37 @@ pub trait Transport {
 
 In debug builds a developer sees text on stdout with no tooling; in any build a crash freezes the rings and saves them with the fault address, so the last log lines before a crash are always recoverable.
 
-**Debug stdout** (feature `debug-stdout`, on by default in `debug_assertions`)
+**Debug stdout** (implemented: `rtlog_decode::stdout::init()`)
 
-- The host decoder is linked into the binary and attached behind the transport; frames are decoded in the drain and printed as text, so `cargo run` behaves like `env_logger`.
-- Only the drain formats; call sites keep the binary path, so timings measured in debug are representative.
-- Format strings come from the contract embedded at build time, not from the call sites; release builds with the feature off contain none of them.
-- On MCU the same feature prints through RTT or semihosting from the drain, for boards without a `rtlog` host tool.
+- The host decoder runs in the drain thread behind a text transport; frames are decoded there and printed, so `cargo run` reads like `env_logger`. The level comes from `RTLOG` (`trace` … `error`, `off`); colours when the output is a terminal and `NO_COLOR` is unset; stdout or stderr.
+- Only the drain formats; call sites keep the binary path, so timings measured with it on are representative.
+- The contract comes from the running binary's own descriptors.
+- Planned: on MCU the same through RTT or semihosting from the drain, for boards without a host tool.
 
-**Crash log** (feature `crashlog`)
+**Crash log** (implemented on Unix with `std`: `rtlog::crash::install(path)`; C: `rtlog_crash_install(path)`)
 
-On a panic, hard fault, signal or `abort`, the handler:
+On a panic, `SIGSEGV`, `SIGBUS`, `SIGFPE`, `SIGILL` or `SIGABRT` (so `abort()` and `panic = "abort"`), the handler:
 
-1. Freezes every ring: sets a global `AtomicBool` that turns later log calls into no-ops, so the snapshot is consistent.
-2. Writes a `crash` control frame with the fault context:
+1. Freezes logging (runtime level off) for fatal signals, so the snapshot is consistent. A panic does not freeze: the program may survive it.
+2. Opens the crash file (`open(2)`, path fixed at install) and writes a stream header.
+3. For every context, without consuming anything: its name, any drop count, a `ctx_time` frame (newest timestamp minus the deltas of the unread frames), then every unread frame, oldest first.
+4. Writes the `crash` frame on the crashing thread's context: kind, signal and code, fault address (`si_addr`), program counter (from `ucontext` on Linux x86-64 and aarch64), and the panic message or signal name.
+5. Lets the normal handling continue: the previous panic hook, or the signal's default action (core dump, exit status naming the signal).
+
+`snapshot(reason)` writes the same dump without crashing (kind 3), for watchdogs that detect a deadlock or a missed deadline.
+
+The handler allocates nothing, formats nothing on the signal path, takes no blocking lock (`try_lock` on the ring registry, a few attempts), and uses `open` / `write` / `close` only. What a dump cannot contain: frames already handed to a transport but still in its buffer, frames dropped because a ring was full (counted), and anything after `SIGKILL` or power loss. Tests crash real child processes (Rust: panic on division by zero, null write, hardware divide by zero, `abort`; C: the same plus snapshot) and check that every record logged before the crash is in the dump.
+
+Planned for MCU: the fault context below, captured from the exception frame.
 
    | Field | MCU (Cortex-M) | Linux / desktop |
    | --- | --- | --- |
-   | reason | HardFault, UsageFault, panic | signal number, panic message ID |
+   | reason | HardFault, UsageFault, panic | signal number, panic message |
    | pc / lr | from the exception stack frame | from `ucontext` |
    | fault address | `MMFAR` / `BFAR`, `CFSR` bits | `si_addr` |
-   | stack | `SP` plus the top 64 words | up to 32 return addresses via frame pointers |
-   | build | contract hash, firmware version ID | contract hash, build ID from `.note.gnu.build-id` |
-   | ctx | the context that faulted, if known | thread ID |
-
-3. Dumps each ring's unread region, oldest first, to the crash sink, then the `crash` frame.
-4. Lets the normal fault handling continue (reset, core dump, signal default).
+   | stack | `SP` plus the top 64 words | up to 32 return addresses via frame pointers (planned) |
+   | build | contract hash, firmware version ID | contract hash in the dump's header |
+   | ctx | the context that faulted, if known | the crashing thread's context |
 
 **Crash sinks**
 
@@ -515,6 +532,12 @@ The benchmark answers four questions with numbers: cost per call, sustainable th
 | Linux aarch64 (Raspberry Pi 4) | `tracing` fmt, `env_logger`, LTTng-UST |
 | macOS and Windows desktop | `tracing` fmt, `env_logger`, `fmtlog` |
 
+**Budgets** (enforced in CI by `scripts/spec_check.py`, which reads them from this section)
+
+- Speed: ≤ 50 cycles per W1 call on x86-64 and aarch64 application cores, best p50 of the timing report.
+- Size on Cortex-M4F (`thumbv7em-none-eabihf`, `opt-level = "s"`, LTO, `size/mcu`): fixed runtime code ≤ 2560 bytes, and ≤ 64 bytes of code per additional call site.
+- RAM: the rings the application declares plus a fixed per-ring state; nothing grows at runtime.
+
 **Expected results** (hypotheses to verify, not claims)
 
 Budgets are stated in CPU cycles, because a call's cost is a cycle count and its time is cycles ÷ clock: 50 cycles is 15 ns at 3.3 GHz but 500 ns at 100 MHz. Nanoseconds are quoted only for a named clock.
@@ -543,7 +566,7 @@ Budgets are stated in CPU cycles, because a call's cost is a cycle count and its
 
 ## 11. Open questions and roadmap
 
-Fifteen decisions are settled and the spec is implementable for `core` and `decode`; the items under Open questions are the only things still to choose.
+Nineteen decisions are settled and the spec is implementable for `core` and `decode`; the items under Open questions are the only things still to choose.
 
 **Decision log**
 
@@ -564,6 +587,10 @@ Fifteen decisions are settled and the spec is implementable for `core` and `deco
 | 13 | Debug stdout | `std` only; MCU uses the host tool |
 | 14 | Naming | `rtlog` everywhere: crates `rtlog-*`, macros `rtlog::`, CLI `rtlog`, files `.rtlog`, env `RTLOG_*` |
 | 15 | Licence | MIT OR Apache-2.0, at the user's option |
+| 16 | Log hot path | Encode in place in the ring on hosts; stack buffer + one shared push on bare metal (code size) |
+| 17 | Crash log | Read-only dump of every ring's unread tail + `crash` frame, from a panic hook and async-signal-safe handlers; `ctx_time` frame aligns times |
+| 18 | Debug stdout | `rtlog_decode::stdout`: decoder in the drain thread, level from `RTLOG` |
+| 19 | C / C++ | Header-only producer; site ID = descriptor index; contract read from the ELF |
 
 **Tests and benchmarks**
 
