@@ -38,6 +38,17 @@ pub(crate) struct Entry {
 
 pub(crate) static PENDING: Mutex<Vec<Entry>> = Mutex::new(Vec::new());
 pub(crate) static REGISTRY: Mutex<Vec<Entry>> = Mutex::new(Vec::new());
+/// Every live ring, for the crash dump. Held only for a push or a removal, so
+/// a `try_lock` from a signal handler almost always succeeds; `REGISTRY`, by
+/// contrast, is held for a whole drain pass, transport writes included.
+pub(crate) static RINGS: Mutex<Vec<Arc<Shared>>> = Mutex::new(Vec::new());
+/// Set by the first drain pass. Before it, exited threads' rings are kept only
+/// up to [`KEEP_WITHOUT_DRAIN`], so a program that never installs a drain does
+/// not keep one 64 KiB ring per thread it ever ran.
+static DRAIN_SEEN: AtomicBool = AtomicBool::new(false);
+/// How many exited threads' rings are kept while no drain has run: enough for
+/// a crash dump to show the last finished workers, bounded at 1 MiB.
+pub const KEEP_WITHOUT_DRAIN: usize = 16;
 static NEXT_CTX: AtomicU32 = AtomicU32::new(1);
 static LIVE_CONTEXTS: AtomicUsize = AtomicUsize::new(0);
 static DROPS: AtomicU64 = AtomicU64::new(0);
@@ -61,6 +72,34 @@ impl Drop for Local {
         // takes the slow path and is dropped instead of touching a released ring.
         let _ = FAST.try_with(|f| f.set(core::ptr::null()));
         self.shared.ring.close();
+        if !DRAIN_SEEN.load(Ordering::Acquire) {
+            // No drain so far: nothing retires rings, so keep only the last
+            // `KEEP_WITHOUT_DRAIN` closed ones (a crash dump still shows the
+            // threads that just finished) and release the oldest. Frames in a
+            // released ring are lost, as they would be at exit. A drain that
+            // starts in between finds the entries in `REGISTRY` and retires
+            // them itself.
+            let mut pending = lock(&PENDING);
+            let closed = pending.iter().filter(|e| e.shared.ring.is_closed()).count();
+            if closed > KEEP_WITHOUT_DRAIN {
+                let mut released = Vec::new();
+                let mut excess = closed - KEEP_WITHOUT_DRAIN;
+                pending.retain(|e| {
+                    if excess > 0 && e.shared.ring.is_closed() {
+                        excess -= 1;
+                        released.push(e.shared.clone());
+                        return false;
+                    }
+                    true
+                });
+                drop(pending);
+                let mut rings = lock(&RINGS);
+                for r in &released {
+                    rings.retain(|s| !Arc::ptr_eq(s, r));
+                    LIVE_CONTEXTS.fetch_sub(1, Ordering::Relaxed);
+                }
+            }
+        }
     }
 }
 
@@ -85,6 +124,7 @@ fn new_local() -> Local {
     });
     shared.ring.mark_split(ctx);
     LIVE_CONTEXTS.fetch_add(1, Ordering::Relaxed);
+    lock(&RINGS).push(shared.clone());
     lock(&PENDING).push(Entry {
         shared: shared.clone(),
         announced_gen: 0,
@@ -191,7 +231,7 @@ impl Drop for SpanGuard {
 #[doc(hidden)]
 #[inline]
 pub fn __span_enter(site: u32) -> SpanGuard {
-    if !crate::enabled(crate::Level::Info) {
+    if !crate::level::spans_enabled() {
         return SpanGuard::INERT;
     }
     let now = crate::clock::now();
@@ -200,7 +240,7 @@ pub fn __span_enter(site: u32) -> SpanGuard {
             let l = l.get_or_init(new_local);
             let seq = l.span_seq.get() + 1;
             l.span_seq.set(seq);
-            let id = (u64::from(l.ctx & 0xffff) << 48) | (seq & 0xffff_ffff_ffff);
+            let id = (u64::from(l.ctx) << 32) | (seq & 0xffff_ffff);
             let parent = l.current_span.get();
             let payload = wire::span_open_payload(site, id, parent);
             if push(l, wire::CTRL_SPAN_OPEN, now, &payload) {
@@ -266,6 +306,7 @@ impl<T: Transport> Drain<T> {
         // Holding REGISTRY makes this the only consumer for the pass; producers
         // never take it, so the transport may log while we hold it.
         let mut reg = lock(&REGISTRY);
+        DRAIN_SEEN.store(true, Ordering::Release);
         {
             let mut pending = lock(&PENDING);
             reg.append(&mut pending);
@@ -317,6 +358,7 @@ impl<T: Transport> Drain<T> {
                     return true;
                 }
                 LIVE_CONTEXTS.fetch_sub(1, Ordering::Relaxed);
+                lock(&RINGS).retain(|s| !Arc::ptr_eq(s, &e.shared));
                 return false;
             }
             true

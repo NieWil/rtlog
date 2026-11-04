@@ -47,7 +47,7 @@ mod runtime;
 pub use arg::{Log, Tag, Writer};
 pub use clock::set_clock;
 pub use drain::{Full, SliceTransport, Transport};
-pub use level::{enabled, set_level, set_off, Level};
+pub use level::{enabled, set_level, set_off, set_spans, spans_enabled, Level};
 pub use ring::{Consumer, Producer, Ring, SpanId, ARGS_CAP, FRAME_MAX};
 pub use site::{Site, SiteKind};
 
@@ -55,7 +55,8 @@ pub use site::{Site, SiteKind};
 pub use drain::IoTransport;
 #[cfg(feature = "std")]
 pub use runtime::{
-    set_context_name, spawn_drain, stats, Drain, DrainHandle, SpanGuard, Stats, THREAD_RING,
+    set_context_name, spawn_drain, stats, Drain, DrainHandle, SpanGuard, Stats, KEEP_WITHOUT_DRAIN,
+    THREAD_RING,
 };
 
 #[doc(hidden)]
@@ -117,6 +118,14 @@ macro_rules! __unit {
 /// rtlog::info!("x={} y={}", 1u8);
 /// ```
 ///
+/// Inline captures (`{x}`) are not supported, because the format string must
+/// be a plain literal that goes into the contract; write `"x={}", x`:
+///
+/// ```compile_fail
+/// let x = 1u8;
+/// rtlog::info!("x={x}");
+/// ```
+///
 /// Arguments must implement [`Log`]:
 ///
 /// ```compile_fail
@@ -127,6 +136,10 @@ macro_rules! __unit {
 macro_rules! log {
     (@site $lvl:expr, $fmt:literal, $n:expr) => {{
         const __N: usize = $n;
+        const _: () = assert!(
+            !$crate::site::has_inline_capture($fmt),
+            "rtlog: inline captures like {{x}} are not supported; write \"x={{}}\", x"
+        );
         const _: () = assert!(
             $crate::site::count_placeholders($fmt) == __N,
             "rtlog: placeholder count does not match the number of arguments"
@@ -309,7 +322,7 @@ mod tests {
         let outer = crate::span!(to: &mut p, "outer");
         let inner = crate::span!(to: &mut p, "inner");
         assert_eq!(inner.parent, outer.id);
-        assert_eq!(outer.id >> 48, 3);
+        assert_eq!(outer.id >> 32, 3);
         p.span_exit(inner);
         p.span_exit(outer);
         let again = crate::span!(to: &mut p, "outer");

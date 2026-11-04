@@ -11,10 +11,14 @@ Static checks (always run):
   spec       the budgets this script enforces are present in the spec
 
 Measured checks (when reports are given):
-  --timing FILE...  timing reports (examples/timing.rs); the best W1 p50 must
-                    be within the spec's cycle budget
+  --timing FILE...  timing reports (examples/timing.rs); the best W1 p50 is
+                    compared with the spec's cycle budget. Over budget is a
+                    warning, because cycle counts on shared CI runners vary
+                    by 10-20 cycles from run to run; --strict-timing makes it
+                    a failure (for a quiet, dedicated machine)
   --size FILE       size report (scripts/size_report.py); fixed runtime and
                     per-site code must be within the spec's size budgets
+                    (deterministic, always a failure when over)
 
 Budgets are read from docs/spec.md, so changing the spec changes the gate.
 Exit status is non-zero if any check fails.
@@ -46,11 +50,16 @@ FORBIDDEN = [
 ]
 
 failures = []
+warnings = []
 notes = []
 
 
 def fail(check, msg):
     failures.append(f"[{check}] {msg}")
+
+
+def warn(check, msg):
+    warnings.append(f"[{check}] {msg}")
 
 
 def fn_bodies(src, name):
@@ -168,7 +177,7 @@ def spec_budgets():
     return budgets
 
 
-def check_timing(paths, budget):
+def check_timing(paths, budget, strict):
     best = None
     for p in paths:
         text = pathlib.Path(p).read_text()
@@ -181,7 +190,7 @@ def check_timing(paths, budget):
         best = cycles if best is None else min(best, cycles)
     if best is not None and budget is not None:
         if best > budget:
-            fail("performance", f"W1 log call: best p50 {best} cycles > spec budget {budget}")
+            (fail if strict else warn)("performance", f"W1 log call: best p50 {best} cycles > spec budget {budget}")
         else:
             notes.append(f"performance: W1 {best} cycles ≤ budget {budget}")
 
@@ -205,19 +214,22 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--timing", nargs="*", default=[], help="timing report(s) to check against the cycle budget")
     ap.add_argument("--size", help="size report to check against the size budgets")
+    ap.add_argument("--strict-timing", action="store_true", help="fail (not warn) when the cycle budget is missed")
     a = ap.parse_args()
     budgets = spec_budgets()
     check_realtime()
     check_wire()
     check_usability()
     if a.timing:
-        check_timing(a.timing, budgets.get("cycles"))
+        check_timing(a.timing, budgets.get("cycles"), a.strict_timing)
     if a.size:
         check_size(a.size, budgets)
     print("## Spec rules\n")
     print("Budgets read from docs/spec.md: " + ", ".join(f"{k} = {v}" for k, v in budgets.items()) + "\n")
     for n in notes:
         print(f"- {n}")
+    for w in warnings:
+        print(f"- ⚠ {w} (reported, not gated: shared runners vary; see --strict-timing)")
     if failures:
         print(f"\n**{len(failures)} rule(s) broken:**\n")
         for f in failures:

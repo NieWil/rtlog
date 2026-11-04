@@ -4,20 +4,22 @@ A log call writes into the calling thread's ring and returns; a drain sends the 
 
 ## What to do
 
-1. **Install the handler first thing in `main`**, with a path on a disk that survives the crash:
+1. **Install the handler first thing in `main`**, with a directory on a disk that survives the crash:
 
    ```rust
-   rtlog::crash::install("/var/lib/myapp/crash.rtlog")?;
+   rtlog::crash::install("/var/lib/myapp/crashes")?;
    ```
 
-   In C or C++: `rtlog_crash_install("/var/lib/myapp/crash.rtlog");`
+   In C or C++: `rtlog_crash_install("/var/lib/myapp/crashes");` (the directory must exist).
+
+   Each dump is a new file, `crash-<pid>-<n>.rtlog`, numbered from 1 per process. A caught panic, a watchdog snapshot and a later restart of the service (a new pid) never overwrite an earlier dump. `rtlog::crash::dumps()` / `rtlog_crash_dumps()` tells how many this process has written.
 
 2. **Keep the binary and its contract** for every build you ship. A dump decodes only against the build that wrote it: `rtlog contract --elf myapp -o myapp.contract.jsonl` (or `rtlog::contract::write` at startup).
 
 3. **After a crash, decode the dump:**
 
    ```sh
-   rtlog decode --contract myapp.contract.jsonl /var/lib/myapp/crash.rtlog
+   rtlog decode --contract myapp.contract.jsonl /var/lib/myapp/crashes/crash-4242-1.rtlog
    ```
 
    ```text
@@ -31,6 +33,8 @@ A log call writes into the calling thread's ring and returns; a drain sends the 
 4. **Size the rings for your burst.** The dump holds whatever the drain has not sent yet, up to a ring's capacity per thread (64 KiB on `std`, your choice on `no_std`). A full ring drops new records and counts them; the dump reports the count.
 
 5. **Optionally, dump on demand.** A watchdog that detects a deadlock or a missed deadline can call `rtlog::crash::snapshot("deadlock suspected")` (C: `rtlog_crash_snapshot`). That writes the same dump without stopping the program.
+
+6. **Run a drain too.** Without one, rtlog keeps the rings of the last 16 threads that exited (so a dump still shows the workers that just finished) and releases older ones; with a drain, nothing is ever held back.
 
 ## What is covered
 
@@ -50,9 +54,9 @@ Integer division by zero in Rust is a panic, not a signal, on every architecture
 
 The handler runs while the process is in an unknown state, so it does only what is safe in a signal handler:
 
-- no allocation, no formatting on the signal path, no blocking lock (one `try_lock` on the ring registry, a few attempts);
-- it reads each ring's unread frames without consuming them, and writes with `open` / `write` / `close`;
+- no allocation, no formatting on the signal path, no blocking lock and no sleep: the list of rings has its own lock that is only ever held for a push or a removal, so the dump does not wait for the drain, which may be blocked inside a transport write at that moment;
+- it reads each ring's unread frames without consuming them, and writes with `open` / `write` / `close`; the file name is built without `snprintf`;
 - before each ring's frames it writes a `ctx_time` frame, so the dump decodes to the right absolute times even though earlier frames went to the main stream;
-- for fatal signals it first turns logging off, so the dump is a consistent snapshot; then the default action runs (core dump, exit status naming the signal). After a panic the previous panic hook runs and the program continues if it can.
+- for fatal signals it first turns logging off, so the dump is a consistent snapshot. If the drain was consuming at that moment, a frame can appear both in the main stream and in the dump, never in neither. Then the default action runs (core dump, exit status naming the signal). After a panic the previous panic hook runs and the program continues if it can.
 
-Tests crash real child processes in each of these ways and check that every record logged before the crash is in the dump: [`crates/rtlog-decode/tests/crash.rs`](../crates/rtlog-decode/tests/crash.rs) for Rust, and [`c/examples/crash.c`](../c/examples/crash.c) through [`scripts/c_e2e.sh`](../scripts/c_e2e.sh) for C.
+Tests crash real child processes in each of these ways, including with a drain blocked in a transport write, and check that every record logged before the crash is in the dump: [`crates/rtlog-decode/tests/crash.rs`](../crates/rtlog-decode/tests/crash.rs) for Rust, and [`c/examples/crash.c`](../c/examples/crash.c) through [`scripts/c_e2e.sh`](../scripts/c_e2e.sh) for C.

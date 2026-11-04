@@ -32,7 +32,7 @@ fn handle(req: &Request) {
 
 ```rust
 let _log = rtlog_decode::stdout::init();          // text on stdout while developing; RTLOG=debug
-rtlog::crash::install("crash.rtlog")?;            // keep the last records if the process dies
+rtlog::crash::install("crashes/")?;               // keep the last records if the process dies
 ```
 
 ```sh
@@ -66,7 +66,7 @@ Each call site gets an ID at build time; its format string goes into a contract 
 | [Zephyr](docs/zephyr.md) | Module, Kconfig, transports |
 | [Performance and size](docs/performance.md) | Cycles per call, flash and RAM, measuring on your board |
 | [Demo on your device](docs/demo.md) | Prebuilt per architecture: copy to a board, run one script, open the trace on your computer |
-| [Specification](docs/spec.md) · [Implementation notes](docs/implementation.md) | The full design, and where v0.2 stands |
+| [Specification](docs/spec.md) · [Roadmap](docs/roadmap.md) · [Implementation notes](docs/implementation.md) | What is built, what is planned, and where the code deviates |
 
 ## Get it
 
@@ -77,7 +77,7 @@ Each call site gets an ID at build time; its format string goes into a contract 
 
 ## Status
 
-v0.2 preview. Every CI run tests it on Linux, macOS, Windows, and on arm64, ARMv7, RISC-V and x86 under QEMU. Each run also includes a 2-minute soak test, Miri, and Thread and Address sanitizers. Before 1.0: strip format strings from shipped binaries, measure the Cortex-M cycle budget on hardware, and add `derive(Log)` and the `log` / `tracing` / `defmt` bridges.
+v0.2 preview. Every CI run tests it on Linux, macOS, Windows, and on arm64, ARMv7, RISC-V and x86 under QEMU. Each run also includes a 2-minute soak test, Miri, and Thread and Address sanitizers. Not yet there: `derive(Log)`, the `log` / `tracing` / `defmt` bridges, per-module levels, resync on a lossy link, and stripping format strings from shipped binaries. [Roadmap →](docs/roadmap.md)
 
 ## Licence
 

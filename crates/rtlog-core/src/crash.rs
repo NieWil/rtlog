@@ -3,11 +3,16 @@
 //! last log lines before the failure are never lost.
 //!
 //! ```no_run
-//! rtlog::crash::install("/var/lib/myapp/crash.rtlog").unwrap();
-//! // ... on a segfault, division by zero, abort or panic, the file holds the
-//! // unread tail of every thread's ring plus a CRASH record:
-//! //   rtlog decode --contract app.contract.jsonl /var/lib/myapp/crash.rtlog
+//! rtlog::crash::install("/var/lib/myapp/crashes").unwrap();
+//! // ... on a segfault, division by zero, abort or panic, a new file
+//! // /var/lib/myapp/crashes/crash-<pid>-<n>.rtlog holds the unread tail of
+//! // every thread's ring plus a CRASH record:
+//! //   rtlog decode --contract app.contract.jsonl crashes/crash-4242-1.rtlog
 //! ```
+//!
+//! Each dump is a new file, numbered per process, so a caught panic or a
+//! watchdog [`snapshot`] never overwrites an earlier dump, and a restart after
+//! a crash (new pid) never overwrites the crash.
 //!
 //! What it covers: panics (including integer division by zero in Rust),
 //! `SIGSEGV`, `SIGBUS`, `SIGFPE`, `SIGILL` and `SIGABRT` (so `abort()` and
@@ -15,19 +20,24 @@
 //!
 //! How it stays safe inside a signal handler: it allocates nothing, takes no
 //! blocking lock (only `try_lock`), formats nothing, reads the rings without
-//! consuming them and writes with `open(2)` / `write(2)`. After the dump the
-//! default action runs (core dump, exit status shows the signal). On a panic
-//! the previous panic hook runs after the dump, and logging keeps working.
+//! consuming them and writes with `open(2)` / `write(2)`. The list of rings
+//! has its own lock that is only ever held for a push or a removal, so the
+//! dump does not depend on the drain, which may be blocked in a transport
+//! write at that moment. A fatal signal first freezes logging; a dump taken
+//! while the drain is consuming may then repeat a frame the drain had also
+//! sent, never lose one. After the dump the default action runs (core dump,
+//! exit status shows the signal). On a panic the previous panic hook runs
+//! after the dump, and logging keeps working.
 
 use std::ffi::CString;
 use std::io;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock, TryLockError};
 
 use crate::ring::FRAME_MAX;
-use crate::runtime::{Entry, Shared, FAST, PENDING, REGISTRY};
+use crate::runtime::{Shared, FAST, REGISTRY, RINGS};
 use crate::varint;
 use crate::wire::{self, Header, HEADER_LEN};
 
@@ -43,20 +53,37 @@ pub const SIGNALS: [i32; 5] = [
 /// Crash kind for [`snapshot`]: a dump requested by the program, not a crash.
 pub const CRASH_SNAPSHOT: u8 = 3;
 
-static PATH: OnceLock<CString> = OnceLock::new();
+/// `<dir>/crash-<pid>-`, so a dump only appends its number and `.rtlog`.
+static PREFIX: OnceLock<CString> = OnceLock::new();
 static HEADER: OnceLock<[u8; HEADER_LEN]> = OnceLock::new();
+/// Dumps written so far by this process.
+static SEQ: AtomicU32 = AtomicU32::new(0);
 /// Set by the first fatal dump: later signals (an abort after a panic, a fault
 /// inside the handler) do not dump again.
 static FATAL: AtomicBool = AtomicBool::new(false);
 
-/// Install the crash handler, writing dumps to `path` (truncated on each dump).
+/// Install the crash handler. Dumps go to `dir` (created if missing) as
+/// `crash-<pid>-<n>.rtlog`, `n` counting from 1 per process.
 ///
 /// Call it early in `main`, once. It also fixes the clock rate now, so the
 /// handler never calibrates it.
-pub fn install(path: impl AsRef<Path>) -> io::Result<()> {
-    let c = CString::new(path.as_ref().as_os_str().as_bytes())
+pub fn install(dir: impl AsRef<Path>) -> io::Result<()> {
+    let dir = dir.as_ref();
+    std::fs::create_dir_all(dir)?;
+    let mut prefix = dir.as_os_str().as_bytes().to_vec();
+    if !prefix.ends_with(b"/") {
+        prefix.push(b'/');
+    }
+    prefix.extend_from_slice(format!("crash-{}-", std::process::id()).as_bytes());
+    if prefix.len() > PREFIX_MAX {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "crash directory path is too long (200 bytes at most)",
+        ));
+    }
+    let c = CString::new(prefix)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "path contains a NUL byte"))?;
-    if PATH.set(c).is_err() {
+    if PREFIX.set(c).is_err() {
         return Err(io::Error::new(
             io::ErrorKind::AlreadyExists,
             "rtlog crash handler already installed",
@@ -91,6 +118,12 @@ pub fn install(path: impl AsRef<Path>) -> io::Result<()> {
 /// deadlock or a missed deadline. Logging keeps working.
 pub fn snapshot(reason: &str) {
     dump(CRASH_SNAPSHOT, 0, 0, 0, 0, reason, false);
+}
+
+/// Number of dumps this process has written; the last file is
+/// `<dir>/crash-<pid>-<dumps()>.rtlog`.
+pub fn dumps() -> u32 {
+    SEQ.load(Ordering::Acquire)
 }
 
 extern "C" fn on_signal(sig: i32, info: *mut libc::siginfo_t, uctx: *mut libc::c_void) {
@@ -169,27 +202,54 @@ fn write_all(fd: i32, mut b: &[u8]) {
     }
 }
 
-/// `try_lock` a few times: never blocks, so it is safe in a signal handler and
+/// `try_lock` up to `attempts` times with a spin between: never blocks or
+/// sleeps, so it is safe in a signal handler, cheap in a panic hook, and
 /// cannot deadlock if the crashing thread already holds the lock.
-fn try_lock_for<T>(
-    m: &'static Mutex<T>,
-    attempts: u32,
-    sleep: bool,
-) -> Option<MutexGuard<'static, T>> {
+fn try_lock_for<T>(m: &'static Mutex<T>, attempts: u32) -> Option<MutexGuard<'static, T>> {
     for _ in 0..attempts {
         match m.try_lock() {
             Ok(g) => return Some(g),
             Err(TryLockError::Poisoned(p)) => return Some(p.into_inner()),
-            Err(TryLockError::WouldBlock) => {
-                if sleep {
-                    std::thread::sleep(std::time::Duration::from_millis(1));
-                } else {
-                    core::hint::spin_loop();
-                }
-            }
+            Err(TryLockError::WouldBlock) => core::hint::spin_loop(),
         }
     }
     None
+}
+
+/// Longest `<dir>/crash-<pid>-` accepted by [`install`]. The dump path is built
+/// on the stack of a signal handler, which may be a small alternate stack.
+const PREFIX_MAX: usize = 200;
+const PATH_BUF: usize = PREFIX_MAX + 10 + 6 + 1;
+
+/// `<prefix><seq>.rtlog\0` into `buf`, without allocating or formatting.
+fn dump_path(buf: &mut [u8; PATH_BUF], prefix: &[u8], seq: u32) -> Option<usize> {
+    let mut digits = [0u8; 10];
+    let mut n = 0;
+    let mut v = seq;
+    loop {
+        digits[n] = b'0' + (v % 10) as u8;
+        n += 1;
+        v /= 10;
+        if v == 0 {
+            break;
+        }
+    }
+    let suffix = b".rtlog";
+    let total = prefix.len() + n + suffix.len() + 1;
+    if total > buf.len() {
+        return None;
+    }
+    buf[..prefix.len()].copy_from_slice(prefix);
+    let mut i = prefix.len();
+    while n > 0 {
+        n -= 1;
+        buf[i] = digits[n];
+        i += 1;
+    }
+    buf[i..i + suffix.len()].copy_from_slice(suffix);
+    i += suffix.len();
+    buf[i] = 0;
+    Some(i + 1)
 }
 
 /// A control frame: id, ctx varint, payload.
@@ -254,13 +314,18 @@ fn dump(kind: u8, sig: i32, code: i32, addr: u64, pc: u64, msg: &str, fatal: boo
     } else if FATAL.load(Ordering::Acquire) {
         return;
     }
-    let (Some(path), Some(header)) = (PATH.get(), HEADER.get()) else {
+    let (Some(prefix), Some(header)) = (PREFIX.get(), HEADER.get()) else {
         return;
     };
+    let seq = SEQ.fetch_add(1, Ordering::AcqRel) + 1;
+    let mut path = [0u8; PATH_BUF];
+    if dump_path(&mut path, prefix.as_bytes(), seq).is_none() {
+        return;
+    }
     // SAFETY: open(2) is async-signal-safe; `path` is NUL-terminated.
     let fd = unsafe {
         libc::open(
-            path.as_ptr(),
+            path.as_ptr().cast(),
             libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC | libc::O_CLOEXEC,
             0o644 as libc::c_uint,
         )
@@ -271,14 +336,15 @@ fn dump(kind: u8, sig: i32, code: i32, addr: u64, pc: u64, msg: &str, fatal: boo
     write_all(fd, header);
 
     let mut scratch = [0u8; FRAME_MAX];
-    // In a signal handler, spin briefly; from a panic hook, wait up to 50 ms
-    // for a drain pass to finish.
-    let (attempts, sleep) = if fatal { (10_000, false) } else { (50, true) };
-    if let Some(reg) = try_lock_for(&REGISTRY, attempts, sleep) {
-        let pending = try_lock_for(&PENDING, attempts, sleep);
-        let entries: [&[Entry]; 2] = [&reg, pending.as_deref().map_or(&[][..], |p| &p[..])];
-        for e in entries.iter().flat_map(|l| l.iter()) {
-            dump_ring(fd, &e.shared, &mut scratch);
+    // Best effort to keep the drain out while we read: if it is mid-pass
+    // (blocked in a transport write, say) we go on without it. Fatal dumps
+    // have frozen the producers, so a frame can then only be duplicated, not
+    // torn; `scan` stops at a frame the drain released meanwhile.
+    let _drain_out = try_lock_for(&REGISTRY, 1_000);
+    // The ring list is never held for long, so this practically always succeeds.
+    if let Some(rings) = try_lock_for(&RINGS, 10_000) {
+        for shared in rings.iter() {
+            dump_ring(fd, shared, &mut scratch);
         }
     }
 

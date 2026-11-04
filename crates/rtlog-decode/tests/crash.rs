@@ -9,7 +9,7 @@ use std::process::Command;
 use rtlog_decode::{decode, Contract, Output};
 
 const CHILD_ENV: &str = "RTLOG_CRASH_CHILD";
-const FILE_ENV: &str = "RTLOG_CRASH_FILE";
+const DIR_ENV: &str = "RTLOG_CRASH_DIR";
 const MAIN_RECORDS: u32 = 1_000;
 const WORKER_RECORDS: u32 = 300;
 
@@ -19,7 +19,13 @@ fn crash_child() {
     let Ok(mode) = std::env::var(CHILD_ENV) else {
         return;
     };
-    rtlog::crash::install(std::env::var(FILE_ENV).unwrap()).unwrap();
+    rtlog::crash::install(std::env::var(DIR_ENV).unwrap()).unwrap();
+    // "drain": a drain is running and stuck inside a transport write, holding
+    // the registry, when the crash happens. The dump must not depend on it.
+    let _drain = (mode == "drain").then(|| {
+        rtlog::info!("drain mode {}", 1u8);
+        rtlog::spawn_drain(StuckTransport, std::time::Duration::from_millis(1))
+    });
     std::thread::Builder::new()
         .name("worker".into())
         .spawn(|| {
@@ -49,9 +55,40 @@ fn crash_child() {
             rtlog::info!("still logging after snapshot {}", 1u8);
             return;
         }
+        "drain" => {
+            // Give the drain time to start its pass and block in `write`.
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            unsafe { core::ptr::write_volatile(black_box(core::ptr::null_mut::<u32>()), 1) }
+        }
+        "panics" => {
+            // Two caught panics: two numbered dumps, neither overwriting the other.
+            for i in 0..2u8 {
+                let r = std::panic::catch_unwind(|| {
+                    rtlog::info!("request {} starts", i);
+                    let z = black_box(0u32);
+                    black_box(100 / z);
+                });
+                assert!(r.is_err());
+            }
+            assert_eq!(rtlog::crash::dumps(), 2);
+            return;
+        }
         m => panic!("unknown mode {m}"),
     }
     unreachable!("mode {mode} should have crashed");
+}
+
+/// A transport whose first write never returns: the drain holds the registry
+/// lock from inside it, and has consumed nothing (frames are committed after
+/// the write), so every record must still be in the dump.
+struct StuckTransport;
+
+impl rtlog::Transport for StuckTransport {
+    fn write(&mut self, _frame: &[u8]) -> Result<(), rtlog::Full> {
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(60));
+        }
+    }
 }
 
 /// A real integer division by zero in machine code: SIGFPE on x86. Other
@@ -69,9 +106,22 @@ fn hardware_divide_by_zero() {
 
 /// Run the child in `mode`; returns (exit status, decoded crash file as JSON lines).
 fn run_child(mode: &str) -> (std::process::ExitStatus, String, rtlog_decode::Decoded) {
+    let (status, mut dumps) = run_child_all(mode);
+    assert_eq!(dumps.len(), 1, "one dump for {mode}");
+    let (json, text) = dumps.remove(0);
+    (status, json, text)
+}
+
+/// Run the child in `mode`; returns its exit status and every dump it wrote,
+/// in order, decoded as JSON lines and as text.
+fn run_child_all(
+    mode: &str,
+) -> (
+    std::process::ExitStatus,
+    Vec<(String, rtlog_decode::Decoded)>,
+) {
     let dir = std::env::temp_dir().join(format!("rtlog-crash-{}-{mode}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let file = dir.join("crash.rtlog");
+    let _ = std::fs::remove_dir_all(&dir);
     let exe = std::env::current_exe().unwrap();
     // Under a cross-architecture runner (QEMU), launch the child through it.
     let runner = std::env::vars()
@@ -91,22 +141,44 @@ fn run_child(mode: &str) -> (std::process::ExitStatus, String, rtlog_decode::Dec
     let out = cmd
         .args(["--exact", "crash_child", "--nocapture", "--test-threads=1"])
         .env(CHILD_ENV, mode)
-        .env(FILE_ENV, &file)
+        .env(DIR_ENV, &dir)
         .env("RUST_BACKTRACE", "0")
         .output()
         .unwrap();
-    let bytes = std::fs::read(&file).unwrap_or_else(|e| {
-        panic!(
-            "no crash file for {mode}: {e}\nstderr:\n{}",
-            String::from_utf8_lossy(&out.stderr)
-        )
-    });
+    // The child's pid is in the name: crash-<pid>-<n>.rtlog; sort by n.
+    let mut files: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap_or_else(|e| {
+            panic!(
+                "no crash dir for {mode}: {e}\nstderr:\n{}",
+                String::from_utf8_lossy(&out.stderr)
+            )
+        })
+        .map(|e| e.unwrap().path())
+        .collect();
+    files.sort();
+    assert!(
+        !files.is_empty(),
+        "no crash file for {mode}\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let contract = Contract::from_jsonl(&rtlog::contract::to_jsonl()).unwrap();
-    let json = decode(&contract, &bytes, Output::Json, false).unwrap();
-    let text = decode(&contract, &bytes, Output::Text, false).unwrap();
-    assert_eq!(json.error, None, "crash file decodes cleanly");
+    let dumps = files
+        .iter()
+        .map(|file| {
+            let name = file.file_name().unwrap().to_string_lossy().into_owned();
+            assert!(
+                name.starts_with("crash-") && name.ends_with(".rtlog"),
+                "{name}"
+            );
+            let bytes = std::fs::read(file).unwrap();
+            let json = decode(&contract, &bytes, Output::Json, false).unwrap();
+            let text = decode(&contract, &bytes, Output::Text, false).unwrap();
+            assert_eq!(json.error, None, "crash file {name} decodes cleanly");
+            (json.text, text)
+        })
+        .collect();
     std::fs::remove_dir_all(&dir).ok();
-    (out.status, json.text, text)
+    (out.status, dumps)
 }
 
 /// Every record logged before the crash is in the dump, in order, and the
@@ -200,6 +272,39 @@ fn abort_is_logged() {
     assert_eq!(status.signal(), Some(libc::SIGABRT), "{status:?}");
     check_dump(&json, &text);
     assert_eq!(text.crash.unwrap().signal, libc::SIGABRT);
+}
+
+/// The realistic case: a drain is running and stuck in a transport write
+/// (holding the registry) when the process segfaults. The dump still holds
+/// every record, because it does not wait for the drain.
+#[test]
+fn crash_while_the_drain_is_blocked_in_a_write_still_dumps_everything() {
+    let (status, json, text) = run_child("drain");
+    assert_eq!(status.signal(), Some(libc::SIGSEGV), "{status:?}");
+    check_dump(&json, &text);
+}
+
+/// Each dump is a new numbered file: two caught panics give two files, and
+/// the second does not overwrite the first.
+#[test]
+fn each_dump_is_a_new_file() {
+    let (status, dumps) = run_child_all("panics");
+    assert!(status.success());
+    assert_eq!(dumps.len(), 2);
+    for (i, (_, text)) in dumps.iter().enumerate() {
+        let crash = text.crash.as_ref().unwrap();
+        assert_eq!(crash.kind, 1);
+        assert!(
+            crash.message.contains("divide by zero"),
+            "{}",
+            crash.message
+        );
+        assert!(
+            text.text.contains(&format!("request {i} starts")),
+            "dump {i} holds its own records:\n{}",
+            text.text
+        );
+    }
 }
 
 #[test]

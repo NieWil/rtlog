@@ -36,11 +36,13 @@ test "$(grep -c 'INFO  demo\|INFO    request' "$OUT/demo.txt" "$OUT/demo_cpp.txt
 "$RTLOG" contract --elf "$OUT/crash" -o "$OUT/crash.contract.jsonl"
 expect_crash() { # mode, expected exit status (128 + signal), expected text
   set +e
-  "$OUT/crash" "$1" "$OUT/crash-$1.rtlog" 2>/dev/null
+  rm -rf "$OUT/crash-$1" && mkdir -p "$OUT/crash-$1"
+  "$OUT/crash" "$1" "$OUT/crash-$1" 2>/dev/null
   local st=$?
   set -e
   [ "$st" = "$2" ] || { echo "crash $1: exit $st, expected $2"; exit 1; }
-  "$RTLOG" decode --contract "$OUT/crash.contract.jsonl" "$OUT/crash-$1.rtlog" > "$OUT/crash-$1.txt"
+  [ "$(ls "$OUT/crash-$1" | wc -l)" = 1 ] || { echo "crash $1: expected one dump"; ls "$OUT/crash-$1"; exit 1; }
+  "$RTLOG" decode --contract "$OUT/crash.contract.jsonl" "$OUT/crash-$1"/crash-*-1.rtlog > "$OUT/crash-$1.txt"
   [ "$(grep -c 'before crash i=' "$OUT/crash-$1.txt")" = 500 ] || { echo "crash $1: records lost"; tail "$OUT/crash-$1.txt"; exit 1; }
   [ "$(grep -c 'worker step=' "$OUT/crash-$1.txt")" = 200 ] || { echo "crash $1: worker records lost"; exit 1; }
   tail -1 "$OUT/crash-$1.txt" | grep -q -- "$3" || { echo "crash $1: last line"; tail -2 "$OUT/crash-$1.txt"; exit 1; }
@@ -52,4 +54,6 @@ esac
 expect_crash segv 139 "CRASH SIGSEGV"
 expect_crash abort 134 "CRASH SIGABRT"
 expect_crash snapshot 0 "SNAP  snapshot: watchdog: deadline missed"
+# Thread slots are freed when threads exit: 10 x RTLOG_MAX_THREADS short threads, no drops.
+"$OUT/crash" threads "$OUT/crash-threads-dir" || { echo "thread slots were not released"; exit 1; }
 echo "C and C++ end-to-end OK ($CC, $CXX)"

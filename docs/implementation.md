@@ -18,10 +18,10 @@ This file tracks how the code in `crates/` matches [the specification](spec.md):
 | 10c Benchmark model: workloads W1–W5, timing report, Criterion | Built (host only) | `examples/timing.rs`, `benches/` |
 | Verification: soak test, Miri, ThreadSanitizer, AddressSanitizer | Built | `tests/soak.rs`, CI jobs `miri`, `sanitizers`, `soak` |
 | 4 Contract from the image (`cargo rtlog contract`) | Built as `rtlog contract --elf`, for Rust and C descriptors, PIE relocations applied | `rtlog-decode/src/elf.rs` |
-| 8b Debug stdout, crash log (Unix; C on POSIX) | Built | `rtlog_decode::stdout`, `rtlog::crash`, `rtlog_crash_install` |
+| 8b Debug stdout, crash log (Unix; C on POSIX) | Built: one numbered file per dump, rings read without waiting for the drain | `rtlog_decode::stdout`, `rtlog::crash`, `rtlog_crash_install` |
 | C / C++ producer, Zephyr module | Built (Zephyr not CI-built) | `c/include/rtlog.h`, `c/zephyr`, `zephyr/module.yml` |
 | 10c Benchmarks in cycles, size on Cortex-M4F | Built | `examples/timing.rs`, `size/mcu`, `scripts/size_report.py` |
-| 5 resync, compression, AEAD; 8b MCU crash capture; 10 `log` / `tracing` / `defmt` bridges and OTLP / CTF outputs; shared memory; contract stripping | Not yet | — |
+| 5 resync, compression, AEAD; 8b MCU crash capture; 10 `log` / `tracing` / `defmt` bridges and OTLP / CTF outputs; shared memory; contract stripping | Not yet | [Roadmap](roadmap.md) |
 
 ## Deviations from the spec
 
@@ -31,13 +31,13 @@ This file tracks how the code in `crates/` matches [the specification](spec.md):
 4. **Dynamic strings and byte slices are capped at 127 bytes.** The length byte uses bit 7 as the truncation flag, so the spec's `{:str<256>}` override cannot be encoded. Truncation keeps strings on a UTF-8 boundary.
 5. **Ring frames carry a 2-byte length prefix inside the ring** so the drain always hands whole frames to the transport. It never goes on the wire. Only `DropNewest` is implemented.
 6. **One log call holds at most 240 argument bytes** (`ARGS_CAP`). A larger call is dropped and counted as a drop.
-7. **The runtime level is global,** not per crate.
+7. **The runtime level is global,** not per crate. Spans have their own switch (`set_spans`), independent of the level, so a `warn`-level build keeps its Perfetto timeline.
 8. **`RTLOG_LEVEL` at build time** removes the call path of sites below the floor; their descriptors stay in the contract.
 9. **On `no_std`, call sites name their producer:** `rtlog::info!(to: &mut producer, ...)`. On `std` the calling thread's ring is used implicitly.
 10. **Default `std` clock** is the CPU counter: invariant TSC (halved, so the rate fits the header's `u32`) on x86-64, `CNTVCT_EL0` on aarch64, otherwise `Instant`. `RTLOG_CLOCK=instant` forces `Instant`. The TSC rate is calibrated for 20 ms on the first drain.
 11. **Text output shows seconds since the first record** in the stream; JSON keeps absolute `ts_ns`.
 12. **The decoder stops at the first bad frame** and reports its byte offset, since there are no resync frames yet.
-13. **Span frames carry a timestamp delta and context**, like log frames, followed by the spec's payload (span site ID, span ID, parent). Span names are span sites in the contract (`"kind":"span"`), not interned strings. Span IDs are context (16 bits) plus a per-context counter (48 bits). On `std` the parent is the thread's current span; with an explicit producer, `span_enter` / `span_exit` track it.
+13. **Span frames carry a timestamp delta and context**, like log frames, followed by the spec's payload (span site ID, span ID, parent). Span names are span sites in the contract (`"kind":"span"`), not interned strings. Span IDs are the full 32-bit context plus a 32-bit per-context counter, so IDs stay unique in a process that creates many threads over its life. On `std` the parent is the thread's current span; with an explicit producer, `span_enter` / `span_exit` track it.
 14. **Registration does not block the drain.** A thread's first log call registers its ring through a separate pending list, and runtime counters are plain atomics. So a transport may log, call `stats()`, or start threads while the drain is inside `poll`. A regression test covers it.
 15. **Text output shows drops and spans** as `DROP` and `SPAN ▶ / ◀` lines, with span durations. Perfetto output turns numeric fields named in the format string (`err={}`) into counter tracks.
 16. **C and C++ site IDs are descriptor indices**, not content hashes: C has no compile-time string hashing. The ID is the descriptor's position in the `rtlog_sites` section plus one, so the log path does no hashing; `rtlog contract --elf` numbers the entries the same way.
@@ -45,4 +45,4 @@ This file tracks how the code in `crates/` matches [the specification](spec.md):
 
 ## Performance status
 
-The spec's budgets (section 10c) are enforced in CI by `scripts/spec_check.py`: ≤ 50 cycles per W1 call (x86-64 and aarch64 runners) and, on Cortex-M4F, ≤ 2560 bytes of fixed runtime code and ≤ 64 bytes per call site. The current figures are on the CI job pages and in [Performance and size](performance.md). On hosts the log call encodes its frame in place in the ring (82 instructions for W1 on x86-64); most of the remaining cost is the timestamp read itself (`rdtsc`, `CNTVCT_EL0`).
+The spec's budgets (section 10c) are checked in CI by `scripts/spec_check.py`: ≤ 50 cycles per W1 call (x86-64 and aarch64 runners; reported and warned on, not gated, since shared runners vary) and, on Cortex-M4F, ≤ 2560 bytes of fixed runtime code and ≤ 64 bytes per call site (gated). The current figures are on the CI job pages and in [Performance and size](performance.md). On hosts the log call encodes its frame in place in the ring (82 instructions for W1 on x86-64); most of the remaining cost is the timestamp read itself (`rdtsc`, `CNTVCT_EL0`).

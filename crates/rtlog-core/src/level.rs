@@ -1,6 +1,6 @@
 //! Log levels and the runtime level filter.
 
-use core::sync::atomic::{AtomicU8, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 /// Severity of a log site, lowest first.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -92,6 +92,22 @@ pub fn set_level(level: Level) {
 /// Disable every site at runtime.
 pub fn set_off() {
     RUNTIME_MIN.store(OFF, Ordering::Relaxed);
+}
+
+static SPANS: AtomicBool = AtomicBool::new(true);
+
+/// Enable or disable span recording at runtime. Spans are independent of the
+/// level filter: `set_level(Level::Warn)` keeps the Perfetto timeline, and
+/// `set_spans(false)` removes it while log records continue. `set_off` stops
+/// both.
+pub fn set_spans(on: bool) {
+    SPANS.store(on, Ordering::Relaxed);
+}
+
+/// Whether spans are recorded (two relaxed loads).
+#[inline(always)]
+pub fn spans_enabled() -> bool {
+    !STATIC_MAX_OFF && SPANS.load(Ordering::Relaxed) && RUNTIME_MIN.load(Ordering::Relaxed) != OFF
 }
 
 /// Current runtime level, or `None` when everything is off.
