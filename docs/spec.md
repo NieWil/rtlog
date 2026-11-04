@@ -4,54 +4,54 @@ Nov 2, 2026 · @Niels
 
 ## 0. Developer experience and API
 
-A developer writes `qlog::info!("pid out={} err={}", out, err)` and reads the line on a terminal; everything between is automatic, and the logger has no measurable effect on the system it observes, on an MCU or on Linux.
+A developer writes `rtlog::info!("pid out={} err={}", out, err)` and reads the line on a terminal; everything between is automatic, and the logger has no measurable effect on the system it observes, on an MCU or on Linux.
 
 **Zero-impact principle** (what "without affecting the system" means)
 
 - No syscalls, no heap, no locks, no formatting on the log call: one counter read, one memcpy per argument, one release store.
-- No background activity unless asked: on `std` the drain thread is opt-in; the alternatives are `qlog::poll()` from the application's own idle point, or an external process reading a shared-memory ring so the application spends only the memcpy.
+- No background activity unless asked: on `std` the drain thread is opt-in; the alternatives are `rtlog::poll()` from the application's own idle point, or an external process reading a shared-memory ring so the application spends only the memcpy.
 - Bounded memory: rings are sized at init and never grow; memory per context is known before deployment.
 - No stdout/stderr, no signal handlers, no `fork` or `exec` interaction; safe inside hard real-time threads, SCHED\_FIFO loops and ISRs.
-- Disabled sites compile to nothing: `QLOG_LEVEL=off` removes every call and every contract entry; a binary built that way is byte-identical to one without logging.
+- Disabled sites compile to nothing: `RTLOG_LEVEL=off` removes every call and every contract entry; a binary built that way is byte-identical to one without logging.
 - Dropping is the only overload behaviour: a slow transport can lose frames but can never slow the producer.
 
-**Public API** (crate `qlog-core`, prefix `qlog`)
+**Public API** (crate `rtlog-core`, prefix `rtlog`)
 
 ```rust
 // Call sites: same shape as println!, every arg implements Log
-qlog::trace!("...", a, b);  qlog::debug!  qlog::info!  qlog::warn!  qlog::error!
-qlog::intern!(name)            // &'static str → u32 ID, zero bytes in the binary
-#[derive(qlog::Log)]           // structs and enums as typed binary args
+rtlog::trace!("...", a, b);  rtlog::debug!  rtlog::info!  rtlog::warn!  rtlog::error!
+rtlog::intern!(name)            // &'static str → u32 ID, zero bytes in the binary
+#[derive(rtlog::Log)]           // structs and enums as typed binary args
 
 // Setup (once)
-qlog::init(Config { level: Level::Info, overflow: DropNewest, ..Default::default() });
-qlog::register(&MOTOR_RING, "motor");    // no_std: one static ring per task
-qlog::isr_ring(&ISR_RING);               // optional, context 0
+rtlog::init(Config { level: Level::Info, overflow: DropNewest, ..Default::default() });
+rtlog::register(&MOTOR_RING, "motor");    // no_std: one static ring per task
+rtlog::isr_ring(&ISR_RING);               // optional, context 0
 
 // Draining: pick one
-qlog::spawn_drain(transport);            // std: dedicated thread, opt-in
-qlog::poll(&mut transport);              // call from idle loop / main loop / DMA callback
-qlog::shm::export("/my-app");        // std: external reader, zero threads in-process
+rtlog::spawn_drain(transport);            // std: dedicated thread, opt-in
+rtlog::poll(&mut transport);              // call from idle loop / main loop / DMA callback
+rtlog::shm::export("/my-app");        // std: external reader, zero threads in-process
 
 // Runtime control
-qlog::set_level("motor", Level::Debug);  // per-crate mask, one atomic store
-qlog::stats() -> Stats                   // frames, bytes, drops per context
+rtlog::set_level("motor", Level::Debug);  // per-crate mask, one atomic store
+rtlog::stats() -> Stats                   // frames, bytes, drops per context
 ```
 
 **Usage by target**
 
 | Target | Setup lines | Reading logs |
 | --- | --- | --- |
-| Cortex-M, RTOS | `static RING: StaticRing<1024>`; `register` in each task; `poll` in idle hook with `RttTransport` | `cargo qlog run` flashes, attaches, decodes live |
-| Embedded Linux daemon | `qlog::init`; `shm::export`; nothing else | `qlog attach /my-app` from a shell or over SSH; `--out otlp` to ship upstream |
-| Desktop app or service | `qlog::init`; `spawn_drain(FileTransport)` or `--features stdout` | `QLOG=info cargo run` prints text; `qlog decode app.qlog` later |
+| Cortex-M, RTOS | `static RING: StaticRing<1024>`; `register` in each task; `poll` in idle hook with `RttTransport` | `cargo rtlog run` flashes, attaches, decodes live |
+| Embedded Linux daemon | `rtlog::init`; `shm::export`; nothing else | `rtlog attach /my-app` from a shell or over SSH; `--out otlp` to ship upstream |
+| Desktop app or service | `rtlog::init`; `spawn_drain(FileTransport)` or `--features stdout` | `RTLOG=info cargo run` prints text; `rtlog decode app.rtlog` later |
 | Library crate | only call sites; no init, no transport | inherits the host application's setup; silent if none |
 
 **Build and retrieval flow**
 
-1. `cargo build`: the macro hashes each site and writes its entry; the build script merges to `target/qlog.contract.json` and fails on collisions.
+1. `cargo build`: the macro hashes each site and writes its entry; the build script merges to `target/rtlog.contract.json` and fails on collisions.
 2. CI archives the contract next to the firmware image, keyed by contract hash.
-3. A stream or capture carries that hash in its header; `qlog` finds the contract in `~/.qlog/contracts/` or a team artifact store and decodes. No manual matching of firmware to symbols.
+3. A stream or capture carries that hash in its header; `rtlog` finds the contract in `~/.rtlog/contracts/` or a team artifact store and decodes. No manual matching of firmware to symbols.
 4. Dependencies using `log`, `tracing` or `defmt` route into the same stream through the backends in section 10, so one viewer shows everything.
 
 **What it buys over printf**
@@ -59,7 +59,7 @@ qlog::stats() -> Stats                   // frames, bytes, drops per context
 - Flash: format strings and formatting code are gone, typically 20–60% of a log-heavy firmware image.
 - Speed: tens of nanoseconds per call; never blocks an ISR or a control loop.
 - Security: paths, function names, internal states and anything written in a message are absent from the shipped binary; a captured stream is unreadable without the contract, which never leaves the build pipeline.
-- Archive: a `.qlog` capture is 5–10× smaller than text and keeps typed fields.
+- Archive: a `.rtlog` capture is 5–10× smaller than text and keeps typed fields.
 
 **Why an existing solution is not enough**
 
@@ -144,9 +144,9 @@ A site ID is a 32-bit content hash, so the scheme works on every target and obje
 
 **Generation and merging**
 
-1. The proc-macro emits one `static` descriptor per site (hash, level, crate, file, line, format string, arg schema) into a dedicated link section: `.qlog.sites` on ELF, `__DATA,__qlog_sites` on Mach-O, `.qlog$sites` on PE (the technique `linkme` uses). Derived `Log` types and interned strings emit descriptors into the same section. No files are written at expansion time, so parallel crate builds cannot race.
-2. `cargo qlog contract <binary>` reads the section with the `object` crate, writes `qlog.contract.json`, checks hash collisions and ring sizes, then strips the section from the shipped image (`objcopy --remove-section`, or on MCU a linker script placing it in a non-loaded segment). Until stripped, the binary is self-describing.
-3. `cargo qlog verify <image>` is the release gate: it fails if the image still contains the descriptor section or any contract format string, so strings can never ship by mistake (threat V2). CI runs it on every release artifact.
+1. The proc-macro emits one `static` descriptor per site (hash, level, crate, file, line, format string, arg schema) into a dedicated link section: `.rtlog.sites` on ELF, `__DATA,__rtlog_sites` on Mach-O, `.rtlog$sites` on PE (the technique `linkme` uses). Derived `Log` types and interned strings emit descriptors into the same section. No files are written at expansion time, so parallel crate builds cannot race.
+2. `cargo rtlog contract <binary>` reads the section with the `object` crate, writes `rtlog.contract.json`, checks hash collisions and ring sizes, then strips the section from the shipped image (`objcopy --remove-section`, or on MCU a linker script placing it in a non-loaded segment). Until stripped, the binary is self-describing.
+3. `cargo rtlog verify <image>` is the release gate: it fails if the image still contains the descriptor section or any contract format string, so strings can never ship by mistake (threat V2). CI runs it on every release artifact.
 4. The merged file is versioned with the firmware; CI archives it with the ELF, keyed by contract hash.
 
 **Binding stream to contract**
@@ -163,7 +163,7 @@ Arguments are written fixed-width so every site has a compile-time maximum frame
 
 | Field | Width | Content |
 | --- | --- | --- |
-| magic | 4 B | `QLG1` |
+| magic | 4 B | `RTL1` |
 | wire\_version | u8 | frame grammar version (1) |
 | scheme | u8 | 0 = hash32 IDs, 1 = elf16 IDs |
 | contract\_hash | u32 | hash of merged contract |
@@ -208,7 +208,7 @@ Arguments are written fixed-width so every site has a compile-time maximum frame
 - Nonce = 32-bit boot counter + 64-bit block counter (96 bits). The boot counter is persisted (flash or RTC backup register) and incremented at `init`; a key must be rotated before the boot counter wraps, so a nonce is never reused after a reset (threat V8). The stream header carries the boot counter so the decoder can derive nonces.
 - Encryption implies authentication; authentication alone is for cases where the transport is already private (SSH, TLS) but tamper evidence in archives is wanted.
 - Cost lands on the drain only: about 1.5 cycles/byte in software on Cortex-M4, or free with a hardware AEAD. Producers see no change.
-- Key provisioning: `qlog-core` exposes `trait KeyStore { fn key(&self, id: u8) -> Option<&[u8; 32]>; }`; integrators implement it over a secure element or a flash slot. The contract file is stored with the ELF under the same access control and is never present on the device in plain form.
+- Key provisioning: `rtlog-core` exposes `trait KeyStore { fn key(&self, id: u8) -> Option<&[u8; 32]>; }`; integrators implement it over a secure element or a flash slot. The contract file is stored with the ELF under the same access control and is never present on the device in plain form.
 
 ## 6. Argument model
 
@@ -229,7 +229,7 @@ pub enum Schema {
 }
 ```
 
-- `#[derive(Log)]` emits `Schema::Struct { hash }` and a descriptor with field names and types into the `.qlog.sites` section (section 4); the hash is the type's path plus field list.
+- `#[derive(Log)]` emits `Schema::Struct { hash }` and a descriptor with field names and types into the `.rtlog.sites` section (section 4); the hash is the type's path plus field list.
 - Generics compose at monomorphisation: `impl<T: Log> Log for Wrapper<T>` builds its `SCHEMA` from `T::SCHEMA`.
 - Floats are IEEE-754 little-endian; no alignment padding on the wire.
 
@@ -243,7 +243,7 @@ pub enum Schema {
 Rules:
 
 - `#[derive(Log)]` records field names and types in the contract under the type's hash, so the host prints `Header { src: 2, dst: 3 }`.
-- `#[qlog(redact)]` on a field writes a 32-bit hash of the value instead of the value, so equality is still visible in logs but the content is not (threat V7). A lint warns on `{:str}` or `{:display}` applied to identifiers containing `key`, `token`, `secret` or `password`.
+- `#[rtlog(redact)]` on a field writes a 32-bit hash of the value instead of the value, so equality is still visible in logs but the content is not (threat V7). A lint warns on `{:str}` or `{:display}` applied to identifiers containing `key`, `token`, `secret` or `password`.
 - `usize`/`isize` are recorded at the target's pointer width (header `ptr_width`), so the same source compiles to 4 or 8 bytes per target.
 - Truncation in tier 3 sets a flag bit in the length byte (bit 7); the decoder renders `…`.
 - Forbidden on the log call: `format!`, `ToString`, any heap allocation, any formatting trait on `no_std`.
@@ -268,11 +268,11 @@ Each context owns a single-producer ring; the one drain is the only consumer, so
 
 | Backing | Feature | Allocation | Default size | Registration |
 | --- | --- | --- | --- | --- |
-| `StaticRing<const N>` | `no_std` | `static` in `.bss` | 1 KiB | `rlog::register(&RING, "motor")` once per task |
+| `StaticRing<const N>` | `no_std` | `static` in `.bss` | 1 KiB | `rtlog::register(&RING, "motor")` once per task |
 | `HeapRing` | `std` | `Box<[u8]>` at thread start | 64 KiB | `thread_local!` lazily on first log |
 | ISR ring | all | static | 256 B | context 0, written only from interrupt context |
 
-- `N` is a power of two and ≥ the largest frame in the contract (checked by `cargo rlog contract`).
+- `N` is a power of two and ≥ the largest frame in the contract (checked by `cargo rtlog contract`).
 - Sizing rule: `N ≥ burst_rate × avg_frame × max_drain_latency`.
 - Registry: `no_std` keeps a fixed table of `AtomicPtr<RingHeader>` (`MAX_CONTEXTS`, default 16); `std` keeps `Mutex<Vec<Arc<RingHeader>>>`. A `std` ring is marked closed on thread exit and freed only after the drain has consumed it.
 
@@ -304,7 +304,7 @@ Implementations: DWT cycle counter (Cortex-M), RTOS tick, `clock_gettime(CLOCK_M
 
 **Levels and filtering**
 
-- Levels `trace, debug, info, warn, error`; a compile-time floor removes sites entirely (`RLOG_LEVEL=info` drops trace/debug from the binary and the contract).
+- Levels `trace, debug, info, warn, error`; a compile-time floor removes sites entirely (`RTLOG_LEVEL=info` drops trace/debug from the binary and the contract).
 - A runtime per-crate mask (`AtomicU8` lookup, one load) lets the field switch levels without rebuilding.
 
 ## 8. Transport and drain
@@ -347,7 +347,7 @@ In debug builds a developer sees text on stdout with no tooling; in any build a 
 - The host decoder is linked into the binary and attached behind the transport; frames are decoded in the drain and printed as text, so `cargo run` behaves like `env_logger`.
 - Only the drain formats; call sites keep the binary path, so timings measured in debug are representative.
 - Format strings come from the contract embedded at build time, not from the call sites; release builds with the feature off contain none of them.
-- On MCU the same feature prints through RTT or semihosting from the drain, for boards without a `qlog` host tool.
+- On MCU the same feature prints through RTT or semihosting from the drain, for boards without a `rtlog` host tool.
 
 **Crash log** (feature `crashlog`)
 
@@ -373,26 +373,26 @@ On a panic, hard fault, signal or `abort`, the handler:
 | Target | Sink | Size |
 | --- | --- | --- |
 | MCU | a reserved flash sector or non-initialised RAM region (`.noinit`) read back after reset | ring sizes + 512 B |
-| Linux | `/var/lib/qlog/crash-<pid>-<ts>.qlog`, written with `write(2)` only (async-signal-safe) | same |
-| Desktop | next to the binary or `$QLOG_CRASH_DIR` | same |
+| Linux | `/var/lib/rtlog/crash-<pid>-<ts>.rtlog`, written with `write(2)` only (async-signal-safe) | same |
+| Desktop | next to the binary or `$RTLOG_CRASH_DIR` | same |
 
 When `flags` bit 2 is on, the crash dump is written through the same AEAD as the stream, using a dedicated nonce space (boot counter + block counter `0xFFFF_FFFF_FFFF_FFFF`), and the sink is wiped after a successful upload, so a later firmware or an attached debugger reads nothing useful from `.noinit` (threat V12).
 
 **Reading it**
 
-- `qlog crash dump.qlog --elf firmware.elf` prints the last lines before the fault, then symbolises `pc`, `lr` and the stack addresses with the ELF's debug info, so the output ends in `pc = 0x0800_4a1c  pid::update  src/pid.rs:91`.
-- On MCU, `cargo qlog run` checks the `.noinit` region at attach time and offers the previous crash before starting the live session.
+- `rtlog crash dump.rtlog --elf firmware.elf` prints the last lines before the fault, then symbolises `pc`, `lr` and the stack addresses with the ELF's debug info, so the output ends in `pc = 0x0800_4a1c  pid::update  src/pid.rs:91`.
+- On MCU, `cargo rtlog run` checks the `.noinit` region at attach time and offers the previous crash before starting the live session.
 - Addresses are only useful with the matching ELF; CI archives the ELF with the contract, keyed by the same hash.
 
 Rules kept from the zero-impact principle: the handler does no allocation, no formatting and no locking; the crash sink is pre-opened or pre-erased at init so the handler only writes.
 
 ## 9. Host decoder
 
-The decoder (`rlog-decode`, a library plus CLI) turns a stream and a contract into text or structured records; it is also the boundary where every ecosystem bridge attaches.
+The decoder (`rtlog-decode`, a library plus CLI) turns a stream and a contract into text or structured records; it is also the boundary where every ecosystem bridge attaches.
 
 **Pipeline**
 
-1. Read the stream header, check `contract_hash`, load the matching contract (from path, or auto-located by hash in `~/.qlog/contracts/`). The loader validates the contract before use: struct nesting depth ≤ 8, no cyclic type hashes, `max_len` ≤ 65 535, unique site and type hashes; an invalid contract is rejected, never partially applied (threat V6).
+1. Read the stream header, check `contract_hash`, load the matching contract (from path, or auto-located by hash in `~/.rtlog/contracts/`). The loader validates the contract before use: struct nesting depth ≤ 8, no cyclic type hashes, `max_len` ≤ 65 535, unique site and type hashes; an invalid contract is rejected, never partially applied (threat V6).
 2. Parse frames per context using the contract's arg schema, treating the stream as untrusted input: every length comes from the contract or a capped prefix, allocations are bounded by `max_len`. Recover at the next resync after any parse error, reporting the skipped byte count.
 3. Reconstruct absolute timestamps per ring from deltas and resync frames; merge rings in timestamp order with a small reorder window.
 4. Render each record.
@@ -415,8 +415,8 @@ pub struct Record<'a> {
 }
 ```
 
-- Live mode: `rlog-decode --follow` attaches to RTT, a serial port, UDP or a file and prints as frames arrive.
-- Offline mode: decode a captured `.rlog` file; the same binary file is the long-term archive, far smaller than text.
+- Live mode: `rtlog-decode --follow` attaches to RTT, a serial port, UDP or a file and prints as frames arrive.
+- Offline mode: decode a captured `.rtlog` file; the same binary file is the long-term archive, far smaller than text.
 
 ## 10. Integration with open logging ecosystems
 
@@ -426,30 +426,30 @@ The logger plugs into existing ecosystems at two seams: on the target it can sit
 
 | Facade | How it plugs in | What is lost |
 | --- | --- | --- |
-| `log` crate | `rlog-log`: implements `log::Log`. The facade hands over a `fmt::Arguments`, already a formatting request, so the backend renders it into the tier-4 stack buffer and sends it as a dynamic string. `std` only. | Zero-cost path; every `log::info!` from a dependency costs a format on device |
+| `log` crate | `rtlog-log`: implements `log::Log`. The facade hands over a `fmt::Arguments`, already a formatting request, so the backend renders it into the tier-4 stack buffer and sends it as a dynamic string. `std` only. | Zero-cost path; every `log::info!` from a dependency costs a format on device |
 | `log` + `kv` | Same backend reads the key-value pairs and sends them as typed args where the value is an int/float/bool/str, falling back to tier 3 for the rest | Nothing for typed values; message text still formatted |
-| `tracing` | `rlog-tracing`: a `Subscriber`/`Layer`. Events map to log frames; `span.enter/exit` map to two control frames (`span_open`, `span_close`) with the span's interned name and ID, so the host can rebuild the span tree. Field values go through the same typed path as `kv`. | Dynamic span fields that are `Debug`-only are formatted on device |
-| `defmt` | `rlog-defmt`: implements `defmt::Logger` so a `defmt`-instrumented dependency writes into the active `rlog` ring; the defmt frame is wrapped in a `foreign` control frame and decoded by the host with the ELF. | None on the hot path; the host needs both contract and ELF |
+| `tracing` | `rtlog-tracing`: a `Subscriber`/`Layer`. Events map to log frames; `span.enter/exit` map to two control frames (`span_open`, `span_close`) with the span's interned name and ID, so the host can rebuild the span tree. Field values go through the same typed path as `kv`. | Dynamic span fields that are `Debug`-only are formatted on device |
+| `defmt` | `rtlog-defmt`: implements `defmt::Logger` so a `defmt`-instrumented dependency writes into the active `rtlog` ring; the defmt frame is wrapped in a `foreign` control frame and decoded by the host with the ELF. | None on the hot path; the host needs both contract and ELF |
 
 Span model shared by every backend: `span_open{id, parent, name}` and `span_close{id}` control frames with 64-bit IDs (high 16 bits = context, low 48 = counter) and the parent carried explicitly, so nesting survives async yields and thread migration; OTLP `trace_id`/`span_id` and Perfetto slices map directly.
 
-Design rule: facades are for dependencies you do not control. The project's own code calls `rlog!` macros directly to keep the zero-format path.
+Design rule: facades are for dependencies you do not control. The project's own code calls `rtlog!` macros directly to keep the zero-format path.
 
 **Host side: emitting into open formats**
 
 | Target format | Bridge | Mapping |
 | --- | --- | --- |
-| syslog / journald | `rlog-decode --out syslog` | level to severity, ctx to `SYSLOG_IDENTIFIER`, args as journal fields `RLOG_<NAME>` |
-| OpenTelemetry Logs | `rlog-decode --out otlp` | `Record` to OTLP `LogRecord`: body = rendered message, attributes = typed args, `trace_id`/`span_id` from the tracing bridge when present |
+| syslog / journald | `rtlog-decode --out syslog` | level to severity, ctx to `SYSLOG_IDENTIFIER`, args as journal fields `RTLOG_<NAME>` |
+| OpenTelemetry Logs | `rtlog-decode --out otlp` | `Record` to OTLP `LogRecord`: body = rendered message, attributes = typed args, `trace_id`/`span_id` from the tracing bridge when present |
 | Perfetto / Chrome trace | `--out perfetto` | contexts to tracks, spans to slices, log records to instant events; opens in ui.perfetto.dev |
-| CTF (LTTng, Babeltrace) | `--out ctf` | contract becomes CTF metadata, each site an event class; lets Trace Compass read `.rlog` captures |
+| CTF (LTTng, Babeltrace) | `--out ctf` | contract becomes CTF metadata, each site an event class; lets Trace Compass read `.rtlog` captures |
 | SEGGER SystemView | `--out sysview` | contexts to tasks, control frames to task switch events; for teams already on that viewer |
 | defmt tooling | `--out defmt-print` | emits the text form defmt-print expects, so `probe-rs run` style workflows stay unchanged |
 
 **Live pipe on desktop and Linux**
 
-- `rlog-decode --follow --out otlp --endpoint http://collector:4318` streams a running process into an existing OpenTelemetry collector; from there Loki, Elasticsearch or Datadog receive it unchanged.
-- For a developer loop, `rlog-host` runs the decoder in-process behind a `Transport` and prints text to stdout, so a desktop build looks like `env_logger` while keeping the binary path.
+- `rtlog-decode --follow --out otlp --endpoint http://collector:4318` streams a running process into an existing OpenTelemetry collector; from there Loki, Elasticsearch or Datadog receive it unchanged.
+- For a developer loop, `rtlog-host` runs the decoder in-process behind a `Transport` and prints text to stdout, so a desktop build looks like `env_logger` while keeping the binary path.
 
 **Interoperability rules**
 
@@ -464,12 +464,12 @@ The design removes the classic log attack surface (format-string injection, stri
 | # | Threat | Severity | Mitigation | Status |
 | --- | --- | --- | --- | --- |
 | V1 | Contract leak: anyone with it reads every capture and learns code structure | High | Stored with the ELF under build-pipeline access control; never on device in plain form; stripped from the binary post-build | In spec |
-| V2 | Unstripped section shipped: `.qlog.sites` left in a release image reintroduces all strings | High | `cargo qlog contract` strips by default; CI check fails a release build whose image still contains the section | In spec (4) |
+| V2 | Unstripped section shipped: `.rtlog.sites` left in a release image reintroduces all strings | High | `cargo rtlog contract` strips by default; CI check fails a release build whose image still contains the section | In spec (4) |
 | V3 | Stream capture on an untrusted transport (UART, UDP) | Medium | AEAD encryption, `flags` bit 2 | In spec |
 | V4 | Stream tampering in archives, forged crash evidence | Medium | AEAD authentication per block, `flags` bit 1 | In spec |
 | V5 | Malformed stream crashes the decoder (host or CI) | Medium | Decoder treats input as untrusted: bounded allocations, length caps from the contract, fuzzing in CI | In spec |
 | V6 | Malicious contract JSON: huge `max_len`, recursive struct hashes | Medium | Contract loader validates: depth limit 8, `max_len` ≤ 65535, hash uniqueness | In spec (9) |
-| V7 | Sensitive values logged by developers (keys, tokens, PII) in typed args | Medium | `#[derive(Log)]` field attribute `#[qlog(redact)]` writes a hash instead of the value; lint for `{:str}` on fields named `*key*`, `*token*`, `*password*` | In spec (6) |
+| V7 | Sensitive values logged by developers (keys, tokens, PII) in typed args | Medium | `#[derive(Log)]` field attribute `#[rtlog(redact)]` writes a hash instead of the value; lint for `{:str}` on fields named `*key*`, `*token*`, `*password*` | In spec (6) |
 | V8 | Nonce reuse after reset: block counter restarts at 0 with the same key | High if encrypted | Nonce = 32-bit boot counter (persisted) + 64-bit block counter; a key is never used across a boot-counter wrap | In spec (5) |
 | V9 | Timing side channel from the log call | Low | Fixed-width writes make call time data-independent except for tier-3 string length; tier 3 is forbidden in security-critical code paths by lint | Document |
 | V10 | Shared-memory ring on Linux: another local process writes garbage into it | Medium | Ring segment opened `0600`, producer-owned; readers get a read-only mapping | In spec (8) |
@@ -541,7 +541,7 @@ The benchmark answers four questions with numbers: cost per call, sustainable th
 
 ## 11. Open questions and roadmap
 
-Thirteen decisions are settled and the spec is implementable for `core` and `decode`; the items under Open questions are the only things still to choose.
+Fourteen decisions are settled and the spec is implementable for `core` and `decode`; the items under Open questions are the only things still to choose.
 
 **Decision log**
 
@@ -560,16 +560,17 @@ Thirteen decisions are settled and the spec is implementable for `core` and `dec
 | 11 | Security | AEAD per block: authentication and encryption, both optional, drain-side |
 | 12 | Tests | Conformance vectors, Criterion on `std`, Cortex-M cycle test in CI |
 | 13 | Debug stdout | `std` only; MCU uses the host tool |
+| 14 | Naming | `rtlog` everywhere: crates `rtlog-*`, macros `rtlog::`, CLI `rtlog`, files `.rtlog`, env `RTLOG_*` |
 
 **Tests and benchmarks**
 
-- `tests/vectors/*.qlog` with expected JSON lines; every decoder implementation must pass them, and every wire or contract-schema change adds vectors.
+- `tests/vectors/*.rtlog` with expected JSON lines; every decoder implementation must pass them, and every wire or contract-schema change adds vectors.
 - Criterion benches on `std` for the log call, the ring round trip and the drain; a cycle-count test on a Cortex-M4 board in CI through `probe-rs`, failing above 50 ns at 100 MHz. x86-64 target ≤ 15 ns. Results published in the README on each release.
 - Fuzzing of the decoder against random and truncated streams (`cargo fuzz`), since field captures are untrusted input.
 
 **Status**
 
-- Ready to implement: `core` (rings, macros, descriptors), `cargo qlog contract`, `decode` with text and JSON output, RTT and file transports, crash log.
+- Ready to implement: `core` (rings, macros, descriptors), `cargo rtlog contract`, `decode` with text and JSON output, RTT and file transports, crash log.
 - Needs the open questions below first: `DropOldest` layout, field contract delivery, key provisioning interface.
 
 **Open questions**
@@ -577,12 +578,12 @@ Thirteen decisions are settled and the spec is implementable for `core` and `dec
 - [ ] `DropOldest` needs a per-frame length byte in the ring; pay it everywhere or make the ring layout depend on the policy?
 - [ ] Contract delivery in the field: hash only, or a compressed contract in a flash region for self-describing devices?
 - [ ] Key provisioning interface for the AEAD key: trait with a single `key(id) -> &[u8; 32]`, or integrate with an existing secure-element API?
-- [ ] Crate names and licence for the open-source release (proposal: `qlog-*`, MIT/Apache-2 dual).
+- [ ] Licence for the open-source release (proposal: MIT/Apache-2 dual).
 
 **Roadmap**
 
-1. v0.1: `rlog-core` (`no_std` rings, macro, contract writer), `rlog-decode` text/JSON, RTT and file transports, Cortex-M and Linux examples.
-2. v0.2: `tracing` and `log` backends, OTLP and Perfetto outputs, `cargo rlog` contract checker.
+1. v0.1: `rtlog-core` (`no_std` rings, macro, contract writer), `rtlog-decode` text/JSON, RTT and file transports, Cortex-M and Linux examples.
+2. v0.2: `tracing` and `log` backends, OTLP and Perfetto outputs, `cargo rtlog` contract checker.
 3. v0.3: `elf-ids` feature, CTF output, DMA UART transport, drain compression on `std`.
 4. v1.0: wire format frozen, contract schema versioned, bench suite published (target: < 50 ns per call on Cortex-M4 at 100 MHz, < 15 ns on x86-64).
 
