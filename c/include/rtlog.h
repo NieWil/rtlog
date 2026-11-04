@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: MIT OR Apache-2.0 */
 /*
  * rtlog.h: header-only C / C++ producer for the rtlog wire format (v0.1).
  *

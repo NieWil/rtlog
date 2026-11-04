@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: MIT OR Apache-2.0 */
 /* rtlog glue for Zephyr: implementation unit, cycle-counter clock, and an
  * optional low-priority drain thread. The default transport writes the binary
  * stream to the console UART; override rtlog_zephyr_write() to use RTT, a

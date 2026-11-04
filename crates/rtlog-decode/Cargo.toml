@@ -3,6 +3,7 @@ name = "rtlog-decode"
 description = "Host decoder for rtlog streams: contract + stream to text or JSON lines"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 repository.workspace = true
 
 [dependencies]
