@@ -11,8 +11,15 @@ pub const HEADER_LEN: usize = 4 + 1 + 1 + 4 + 4 + 1 + 1 + 1;
 
 /// First reserved site ID; IDs at or above it are control frames.
 pub const CONTROL_BASE: u32 = 0xFFFF_FF00;
-/// Payload: full stream header.
+/// Payload: a copy of the 17-byte stream header. The drain writes one every
+/// [`RESYNC_EVERY`] bytes, followed by a `ctx_register` and a `ctx_time` frame
+/// per live context, so a decoder that lost sync can pick the stream up again.
 pub const CTRL_RESYNC: u32 = CONTROL_BASE;
+/// The first bytes of every resync frame: its ID (little-endian) then the
+/// header magic. A decoder searches for these after a bad frame.
+pub const RESYNC_MARKER: [u8; 8] = [0x00, 0xFF, 0xFF, 0xFF, b'R', b'T', b'L', b'1'];
+/// Bytes of frames between two resync frames.
+pub const RESYNC_EVERY: usize = 64 * 1024;
 /// Payload: ctx varint, u32 count of frames dropped since last report.
 pub const CTRL_DROPPED: u32 = CONTROL_BASE + 1;
 /// Payload: ctx varint, name as a dynamic string (len byte + UTF-8).

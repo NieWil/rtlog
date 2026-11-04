@@ -22,7 +22,8 @@ What rtlog does not do yet. The [specification](spec.md) describes only what is 
 
 ## 5. Wire format
 
-- Resync frames (`..00`, reserved): the drain emits the stream header every 64 KiB or 1 s, and the decoder recovers at the next one after a parse error. Today the producer never emits one and the decoder stops at the first bad byte, reporting its offset.
+- A time-based resync (at least once a second) on top of the byte-based one, so a slow, sparse stream also recovers quickly; resync with the full 64-bit timestamp of the next frame instead of per-context `ctx_time` frames.
+- Resync from the `no_std` drain helpers automatically (today the application calls `write_resync`).
 - `time_sync` (`..06`, reserved): ticks to external time (RTC, GPS, NTP).
 - Drain-side compression (`flags` bit 0): per-frame leading-zero stripping or a block codec.
 - Authenticated and encrypted blocks (`flags` bits 1–2, `block_tag` `..08`, `key_id`): ChaCha20-Poly1305 per block between two resyncs, nonce from a persisted boot counter plus a block counter, keys from a `KeyStore` trait over a secure element or a flash slot. Threats V3, V4, V8 and V12 depend on this.
@@ -59,7 +60,6 @@ What rtlog does not do yet. The [specification](spec.md) describes only what is 
 
 ## 9. Host decoder
 
-- Recovery at the next resync after a parse error (see section 5).
 - A reorder window when merging contexts (today items are sorted by timestamp after decoding the whole capture; the stdout mode prints in arrival order).
 - Live mode: `rtlog decode --follow` on RTT, a serial port, UDP or a growing file.
 - Contract auto-location by hash.
@@ -88,7 +88,7 @@ Host-side outputs beyond text, JSON lines and Perfetto: syslog / journald, OpenT
 
 ## Release plan
 
-1. **v0.3**: decoder resync; `derive(Log)` and the `Display` escape hatch; the `log` bridge; inline-capture support or a `{name}` rewrite; `--follow`.
+1. **v0.3**: `derive(Log)` and the `Display` escape hatch; the `log` bridge; inline-capture support or a `{name}` rewrite; `--follow`.
 2. **v0.4**: `tracing` bridge; per-module levels; contract store by hash; stripping and `cargo rtlog verify`; `DropOldest`.
 3. **v0.5**: MCU crash capture; UDP and shared-memory transports; `elf16` IDs; Cortex-M cycle test on hardware.
 4. **v1.0**: wire format frozen, contract schema versioned, bench suite published with a hardware-measured Cortex-M budget.

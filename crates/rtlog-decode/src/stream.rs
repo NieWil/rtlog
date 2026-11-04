@@ -58,6 +58,8 @@ pub enum Event<'c> {
         ctx: u32,
         ticks: u64,
     },
+    /// A resync frame: the stream header again, as a point to recover at.
+    Resync,
     /// The process crashed (or a snapshot was requested); last frame of a dump.
     Crash {
         ts_ns: u64,
@@ -279,6 +281,16 @@ impl<'c> Session<'c> {
                 self.names.insert(ctx, name.clone());
                 Event::CtxRegister { ctx, name }
             }
+            wire::CTRL_RESYNC => {
+                // A copy of the stream header: it must be the one this stream began
+                // with, or this is not a resync point of it.
+                let h = Header::decode(c.take(HEADER_LEN, "resync header")?)
+                    .ok_or_else(|| c.bad("bad resync header"))?;
+                if h != self.header {
+                    return Err(c.bad("resync header differs from the stream's"));
+                }
+                Event::Resync
+            }
             wire::CTRL_CTX_CLOSE => Event::CtxClose { ctx: c.ctx()? },
             wire::CTRL_DROPPED => {
                 let ctx = c.ctx()?;
@@ -381,8 +393,14 @@ pub struct Decoder<'c, 'b> {
     bytes: &'b [u8],
     pos: usize,
     done: bool,
+    recover: bool,
     /// The header's contract hash did not match and decoding was forced.
     pub mismatched: bool,
+    /// Bytes skipped so far to get past bad frames.
+    pub skipped_bytes: usize,
+    /// After an `Err`, how many bytes were skipped to the next resync point
+    /// (`None` when there is none and decoding ended).
+    pub last_skip: Option<usize>,
 }
 
 impl<'c, 'b> Decoder<'c, 'b> {
@@ -395,8 +413,18 @@ impl<'c, 'b> Decoder<'c, 'b> {
             bytes,
             pos: HEADER_LEN,
             done: false,
+            recover: true,
             mismatched,
+            skipped_bytes: 0,
+            last_skip: None,
         })
+    }
+
+    /// Whether to skip to the next resync frame after a bad frame (default), or
+    /// to end decoding at the first one.
+    pub fn recovering(mut self, on: bool) -> Self {
+        self.recover = on;
+        self
     }
 
     /// The stream header.
@@ -423,7 +451,29 @@ impl<'c> Iterator for Decoder<'c, '_> {
                 Some(Ok(ev))
             }
             Err(e) => {
-                self.done = true;
+                // Look for the next resync frame past the start of the bad one.
+                let from = self.pos + 1;
+                let next = self
+                    .recover
+                    .then(|| {
+                        self.bytes
+                            .get(from..)?
+                            .windows(wire::RESYNC_MARKER.len())
+                            .position(|w| w == wire::RESYNC_MARKER)
+                            .map(|i| from + i)
+                    })
+                    .flatten();
+                match next {
+                    Some(at) => {
+                        self.last_skip = Some(at - self.pos);
+                        self.skipped_bytes += at - self.pos;
+                        self.pos = at;
+                    }
+                    None => {
+                        self.last_skip = None;
+                        self.done = true;
+                    }
+                }
                 Some(Err(e))
             }
         }

@@ -60,6 +60,40 @@ fn crash_child() {
             std::thread::sleep(std::time::Duration::from_millis(200));
             unsafe { core::ptr::write_volatile(black_box(core::ptr::null_mut::<u32>()), 1) }
         }
+        "collide" => {
+            // A previous run left crash-<pid>-1.rtlog behind (same pid: a
+            // container restart). The dump must not touch it.
+            let dir = std::path::PathBuf::from(std::env::var(DIR_ENV).unwrap());
+            std::fs::write(
+                dir.join(format!("crash-{}-1.rtlog", std::process::id())),
+                b"earlier crash",
+            )
+            .unwrap();
+            rtlog::crash::snapshot("second run");
+            return;
+        }
+        "flood" => {
+            // A service that catches a panic per request: the disk must not fill.
+            for _ in 0..40 {
+                rtlog::crash::snapshot("noisy watchdog");
+            }
+            assert_eq!(rtlog::crash::dumps(), rtlog::crash::MAX_SOFT_DUMPS);
+            // A fatal signal is still dumped.
+            unsafe { core::ptr::write_volatile(black_box(core::ptr::null_mut::<u32>()), 1) }
+        }
+        "two" => {
+            // Two threads fault at the same moment: the first one's dump must
+            // be complete, the second must wait for it, not kill the process.
+            let go = std::sync::Arc::new(std::sync::Barrier::new(2));
+            let g = go.clone();
+            let t = std::thread::spawn(move || {
+                g.wait();
+                unsafe { core::ptr::write_volatile(black_box(core::ptr::null_mut::<u32>()), 2) }
+            });
+            go.wait();
+            unsafe { core::ptr::write_volatile(black_box(core::ptr::null_mut::<u32>()), 1) };
+            t.join().unwrap();
+        }
         "panics" => {
             // Two caught panics: two numbered dumps, neither overwriting the other.
             for i in 0..2u8 {
@@ -110,6 +144,48 @@ fn run_child(mode: &str) -> (std::process::ExitStatus, String, rtlog_decode::Dec
     assert_eq!(dumps.len(), 1, "one dump for {mode}");
     let (json, text) = dumps.remove(0);
     (status, json, text)
+}
+
+/// Run the child in `mode` with its dump directory `dir`; returns its exit
+/// status and every file in the directory (name, bytes), sorted by name.
+fn run_child_files(
+    mode: &str,
+    dir: &std::path::Path,
+) -> (std::process::ExitStatus, Vec<(String, Vec<u8>)>) {
+    let exe = std::env::current_exe().unwrap();
+    let runner = std::env::vars()
+        .find(|(k, v)| {
+            k.starts_with("CARGO_TARGET_") && k.ends_with("_RUNNER") && !v.trim().is_empty()
+        })
+        .map(|(_, v)| v);
+    let mut cmd = match &runner {
+        Some(r) => {
+            let mut parts = r.split_whitespace();
+            let mut c = Command::new(parts.next().unwrap());
+            c.args(parts).arg(&exe);
+            c
+        }
+        None => Command::new(&exe),
+    };
+    let out = cmd
+        .args(["--exact", "crash_child", "--nocapture", "--test-threads=1"])
+        .env(CHILD_ENV, mode)
+        .env(DIR_ENV, dir)
+        .env("RUST_BACKTRACE", "0")
+        .output()
+        .unwrap();
+    let mut files: Vec<_> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| {
+            let p = e.unwrap().path();
+            (
+                p.file_name().unwrap().to_string_lossy().into_owned(),
+                std::fs::read(&p).unwrap(),
+            )
+        })
+        .collect();
+    files.sort();
+    (out.status, files)
 }
 
 /// Run the child in `mode`; returns its exit status and every dump it wrote,
@@ -184,6 +260,12 @@ fn run_child_all(
 /// Every record logged before the crash is in the dump, in order, and the
 /// crash record comes last.
 fn check_dump(json: &str, text: &rtlog_decode::Decoded) {
+    check_dump_on(json, text, Some("main"));
+}
+
+/// As [`check_dump`]; `crashing` names the context the crash record must be on,
+/// or `None` when either of two racing threads may be the one.
+fn check_dump_on(json: &str, text: &rtlog_decode::Decoded, crashing: Option<&str>) {
     let lines: Vec<serde_json::Value> = json
         .lines()
         .map(|l| serde_json::from_str(l).unwrap())
@@ -213,11 +295,13 @@ fn check_dump(json: &str, text: &rtlog_decode::Decoded) {
         "crash",
         "crash record is last"
     );
-    assert_eq!(
-        lines.last().unwrap()["ctx_name"],
-        "main",
-        "on the crashing thread"
-    );
+    if let Some(name) = crashing {
+        assert_eq!(
+            lines.last().unwrap()["ctx_name"],
+            name,
+            "on the crashing thread"
+        );
+    }
     // Times stay monotonic per context although earlier frames went nowhere.
     let ts: Vec<u64> = lines
         .iter()
@@ -282,6 +366,43 @@ fn crash_while_the_drain_is_blocked_in_a_write_still_dumps_everything() {
     let (status, json, text) = run_child("drain");
     assert_eq!(status.signal(), Some(libc::SIGSEGV), "{status:?}");
     check_dump(&json, &text);
+}
+
+/// A file from an earlier run with the same pid is never overwritten.
+#[test]
+fn an_existing_dump_file_is_never_overwritten() {
+    let dir = std::env::temp_dir().join(format!("rtlog-collide-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let (status, files) = run_child_files("collide", &dir);
+    assert!(status.success());
+    assert_eq!(files.len(), 2, "{files:?}");
+    let old = files.iter().find(|(n, _)| n.ends_with("-1.rtlog")).unwrap();
+    assert_eq!(old.1, b"earlier crash", "the earlier file is untouched");
+    let new = files.iter().find(|(n, _)| n.ends_with("-2.rtlog")).unwrap();
+    assert_eq!(&new.1[..4], b"RTL1", "the new dump went to the next number");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// Caught panics and snapshots stop after MAX_SOFT_DUMPS files; a fatal signal
+/// afterwards is still dumped.
+#[test]
+fn a_flood_of_soft_dumps_is_capped_but_a_fatal_one_still_lands() {
+    let dir = std::env::temp_dir().join(format!("rtlog-flood-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let (status, files) = run_child_files("flood", &dir);
+    assert_eq!(status.signal(), Some(libc::SIGSEGV), "{status:?}");
+    assert_eq!(files.len() as u32, rtlog::crash::MAX_SOFT_DUMPS + 1);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// Two threads fault together: one complete dump, process killed by the signal.
+#[test]
+fn two_threads_crashing_at_once_leave_one_complete_dump() {
+    let (status, json, text) = run_child("two");
+    assert_eq!(status.signal(), Some(libc::SIGSEGV), "{status:?}");
+    check_dump_on(&json, &text, None);
 }
 
 /// Each dump is a new numbered file: two caught panics give two files, and

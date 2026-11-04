@@ -37,6 +37,9 @@ pub const ARGS_CAP: usize = 240;
 pub const FRAME_MAX: usize = 4 + varint::MAX_U64 + 5 + ARGS_CAP;
 /// Ring-internal length prefix.
 const LEN_PREFIX: usize = 2;
+/// Smallest real frame: a `u32` site ID and at least one byte each of
+/// timestamp delta and context.
+const MIN_FRAME: usize = 6;
 
 /// A fixed-size SPSC ring of `N` bytes. `N` must be a power of two, ≥ 64.
 ///
@@ -379,7 +382,8 @@ impl<const N: usize> Ring<N> {
     /// Visit every unread frame without consuming any, oldest first, until `f`
     /// returns `false`. Read-only: safe next to a running consumer only if that
     /// consumer cannot move `tail` meanwhile (the crash dump holds the registry
-    /// lock the `std` drain needs). Allocation-free, for use in a signal handler.
+    /// lock the `std` drain tries to take). Allocation-free, for use in a
+    /// signal handler.
     ///
     /// SAFETY: no other thread may consume this ring during the call.
     #[cfg_attr(not(all(feature = "std", unix)), allow(dead_code))]
@@ -388,18 +392,27 @@ impl<const N: usize> Ring<N> {
         scratch: &mut [u8; FRAME_MAX],
         mut f: impl FnMut(&[u8]) -> bool,
     ) {
-        let head = self.head.load(Ordering::Acquire);
+        // `tail` first, then `head`: both only grow and tail <= head always, so
+        // the snapshot [tail, head) is never inverted. (Loading head first lets
+        // a running consumer move tail past it, and the loop below would then
+        // walk bogus lengths for ages.)
         let mut pos = self.tail.load(Ordering::Acquire);
+        let head = self.head.load(Ordering::Acquire);
         while pos != head {
             let mut len = [0u8; LEN_PREFIX];
             self.read_at(pos, &mut len);
             let len = usize::from(u16::from_le_bytes(len));
-            if len > FRAME_MAX || LEN_PREFIX + len > head.wrapping_sub(pos) {
-                return; // torn by a concurrent writer: stop rather than read garbage
+            // Shorter than the smallest real frame (site ID + two varints) or
+            // longer than the largest: torn or not a frame start. Stop.
+            if !(MIN_FRAME..=FRAME_MAX).contains(&len) || LEN_PREFIX + len > head.wrapping_sub(pos)
+            {
+                return;
             }
             self.read_at(pos.wrapping_add(LEN_PREFIX), &mut scratch[..len]);
             // A consumer that moved past this frame meanwhile may have let the
-            // producer overwrite it: stop rather than hand out garbage.
+            // producer overwrite it: stop rather than hand out garbage. The
+            // fence orders the plain reads above before this reload.
+            core::sync::atomic::fence(Ordering::Acquire);
             if (self.tail.load(Ordering::Acquire).wrapping_sub(pos) as isize) > 0 {
                 return;
             }
@@ -597,6 +610,24 @@ mod tests {
             assert_eq!(&args[4..], &payload[..n]);
         }
         let _ = &mut p;
+    }
+
+    #[test]
+    fn scan_stops_at_a_zero_length_frame_instead_of_walking_it() {
+        // A zeroed region that `head` claims is committed (what a stale `head`
+        // or a torn write looks like): len = 0 is not a frame.
+        let ring = Ring::<64>::new();
+        ring.head.store(40, Ordering::Release);
+        let mut scratch = [0u8; FRAME_MAX];
+        let mut seen = 0;
+        // SAFETY: single-threaded test.
+        unsafe {
+            ring.scan(&mut scratch, |_| {
+                seen += 1;
+                true
+            })
+        };
+        assert_eq!(seen, 0);
     }
 
     #[test]

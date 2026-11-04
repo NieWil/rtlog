@@ -193,7 +193,7 @@ Arguments are written fixed-width so every site has a compile-time maximum frame
 
 | ID | Name | Payload |
 | --- | --- | --- |
-| `..00` | resync | reserved (not emitted; roadmap) |
+| `..00` | resync | a copy of the 17-byte stream header, so the frame starts with the 8-byte marker `00 FF FF FF 'R' 'T' 'L' '1'`; the drain writes one every 64 KiB of frames, followed by a `ctx_register` and a `ctx_time` per live context; section 9 |
 | `..01` | dropped | ctx, u32 count of frames dropped since the last report (ctx 0 in C: calls that found no ring slot) |
 | `..02` | ctx\_register | ctx ID, u8 length + UTF-8 name |
 | `..03` | ctx\_close | ctx ID |
@@ -205,7 +205,7 @@ Arguments are written fixed-width so every site has a compile-time maximum frame
 | `..09` | ctx\_time | ctx, u64 absolute ticks: sets the context's clock, so a crash dump that holds only the tail of a ring still decodes to absolute times |
 
 - Span IDs: high 32 bits = context ID, low 32 bits = per-context counter, so IDs are unique with no atomics and stay unique however many threads a process creates. The frame's `ctx` says which thread executed it.
-- There is no resync today: a corrupted byte ends decoding at that offset (section 9).
+- Resync: a corrupted byte costs the frames up to the next resync frame, not the rest of the capture (section 9). The Rust `std` drain and the C `rtlog_drain` write them; on `no_std` call `drain::write_resync` yourself about every 64 KiB (`PassStats.bytes` counts them) and `write_ctx_time` per context if exact times after a gap matter.
 
 ## 6. Argument model
 
@@ -258,7 +258,7 @@ Each context owns a single-producer ring; a single consumer per ring drains it, 
 | thread ring | `std` | heap, `THREAD_RING` = 64 KiB | fixed | created on a thread's first log call; context named after the thread (`set_context_name` renames) |
 
 - Sizing rule: `N ≥ burst_rate × avg_frame × max_drain_latency`.
-- `std` registry: new rings queue in `PENDING`; the drain moves them to its own `REGISTRY` on each pass and retires a ring once its thread has exited and it is empty. A separate `RINGS` list, held only for a push or a removal, is what the crash dump reads. Without any drain, the rings of the last `KEEP_WITHOUT_DRAIN` (16) exited threads are kept for a dump and older ones released, so a library's log calls in a program with no drain cost at most 1 MiB.
+- `std` registry: new rings queue in `PENDING`; the drain moves them to its own `REGISTRY` on each pass and retires a ring once its thread has exited and it is empty. A separate `RINGS` list, held only for a push or a removal, is what the crash dump reads. While no drain is alive, the rings of the last `KEEP_WITHOUT_DRAIN` (16) threads to finish are kept for a dump and older finished ones released (in the order the threads ended), so a library's log calls in a program with no drain cost at most 1 MiB. This applies again if the drain is dropped.
 - C: a fixed table of `RTLOG_MAX_THREADS` (16) rings of `RTLOG_RING_SIZE` (16 KiB); a thread claims a slot on its first call and a pthread destructor closes it when the thread exits (`rtlog_thread_exit()` elsewhere); the next drain pass frees it. Calls that find no slot are counted and reported as drops on context 0.
 
 **Producer / consumer contract**
@@ -316,11 +316,11 @@ In debug builds a developer sees text on stdout with no tooling; in any build a 
 On a panic, `SIGSEGV`, `SIGBUS`, `SIGFPE`, `SIGILL` or `SIGABRT` (so `abort()` and `panic = "abort"`), the handler:
 
 1. For fatal signals, freezes logging (`set_off`), so the snapshot is consistent. A panic does not freeze: the program may survive it.
-2. Opens a new file `<dir>/crash-<pid>-<n>.rtlog` (`n` from 1 per process; the name is built without `snprintf`) and writes a stream header. A caught panic, a snapshot or a restart never overwrites an earlier dump.
-3. Tries, without blocking, to keep the drain out for the duration (`try_lock` on the registry, a bounded spin); goes on without it if the drain is mid-pass. Takes the ring list under its own short-lived lock.
+2. Opens a new file `<dir>/crash-<pid>-<n>.rtlog` with `O_EXCL` (the pid is read when the dump is written; `n` counts up and skips names that exist; the name is built without `snprintf`) and writes a stream header. Nothing is ever overwritten: not by a caught panic or a snapshot, not by a restart even where containers reuse pid 1, not by a forked child. Panics and snapshots stop after 16 files per process (`MAX_SOFT_DUMPS`); fatal signals are always dumped.
+3. Tries, without blocking, to keep the drain out for the duration (`try_lock` on the registry, a bounded spin); goes on without it if the drain is mid-pass. Takes the ring list under its own short-lived lock; for a panic or snapshot it copies the handles out and releases the lock before writing, so a slow disk never stalls a thread that is starting or exiting.
 4. For every ring, without consuming anything: its name, any drop count, a `ctx_time` frame (newest timestamp minus the deltas of the unread frames), then every unread frame, oldest first. A frame the drain released meanwhile is skipped; after a fatal freeze a frame can therefore appear in both the main stream and the dump, never in neither.
 5. Writes the `crash` frame on the crashing thread's context: kind, signal and code, fault address (`si_addr`), program counter (from `ucontext` on Linux x86-64 and aarch64), and the panic message or signal name.
-6. Lets the normal handling continue: the previous panic hook, or the signal's default action (core dump, exit status naming the signal).
+6. Lets the normal handling continue: the previous panic hook, or the signal's default action (core dump, exit status naming the signal). The handler restores the default action itself after the dump instead of using `SA_RESETHAND`, which would kill a second thread that faults during the dump before it could wait; that second thread waits (two seconds at most) for the first dump to finish.
 
 `snapshot(reason)` writes the same dump without crashing (kind 3), for watchdogs that detect a deadlock or a missed deadline. `dumps()` returns how many dumps the process wrote.
 
@@ -335,7 +335,7 @@ The decoder (`rtlog-decode`, a library plus the `rtlog` CLI) turns a stream and 
 **Pipeline**
 
 1. Read the stream header; check `wire_version` and `contract_hash` against the contract given on the command line (`--force` overrides). The contract loader validates before use: level names, `nargs` ≤ 32, format string length, placeholder count equal to `nargs`, no IDs in the control range.
-2. Parse frames per context using the contract's argument count and the wire tags, treating the stream as untrusted input: every length is capped, allocations are bounded, and a mutation test over corrupted and truncated streams checks that nothing panics. A parse error ends decoding and reports the byte offset; records before it are kept.
+2. Parse frames per context using the contract's argument count and the wire tags, treating the stream as untrusted input: every length is capped, allocations are bounded, and a mutation test over corrupted and truncated streams checks that nothing panics. After a parse error the decoder looks for the next resync marker; if there is one it resumes there (the output gets a `GAP` line, a `gap` JSON record and a Perfetto marker, and `Decoded::gaps` / `skipped_bytes` count them), and the `ctx_time` frames that follow a resync make times exact again. If there is none, decoding ends and reports the byte offset; records before it are kept. `Decoder::recovering(false)` turns recovery off.
 3. Reconstruct absolute timestamps per ring from deltas and `ctx_time` frames; sort every item by timestamp for the whole-capture outputs (the stdout mode prints in arrival order).
 4. Render each record, span and crash.
 

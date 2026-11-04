@@ -54,6 +54,31 @@ esac
 expect_crash segv 139 "CRASH SIGSEGV"
 expect_crash abort 134 "CRASH SIGABRT"
 expect_crash snapshot 0 "SNAP  snapshot: watchdog: deadline missed"
+# Two threads fault at once: one complete dump (the second waits for the first).
+expect_crash two 139 "CRASH SIGSEGV"
+# A dump never overwrites an existing file, even one with the same pid.
+rm -rf "$OUT/collide" && mkdir -p "$OUT/collide"
+"$OUT/crash" collide "$OUT/collide" || { echo "collide: exit $?"; exit 1; }
+[ "$(ls "$OUT/collide" | wc -l)" = 2 ] || { echo "collide: expected 2 files"; ls "$OUT/collide"; exit 1; }
+[ "$(cat "$OUT"/collide/crash-*-1.rtlog)" = "earlier crash" ] || { echo "collide: earlier file was overwritten"; exit 1; }
+# A flood of snapshots is capped (16), then a fatal signal is still dumped: 17 files.
+rm -rf "$OUT/flood" && mkdir -p "$OUT/flood"
+set +e; "$OUT/crash" flood "$OUT/flood" 2>/dev/null; st=$?; set -e
+[ "$st" = 139 ] || { echo "flood: exit $st"; exit 1; }
+[ "$(ls "$OUT/flood" | wc -l)" = 17 ] || { echo "flood: expected 17 files"; ls "$OUT/flood" | wc -l; exit 1; }
+# The drain writes resync frames; a capture with damage in the middle still decodes
+# past it (the decoder skips to the next resync frame).
+rm -rf "$OUT/resync" && mkdir -p "$OUT/resync"
+"$OUT/crash" resync "$OUT/resync" || { echo "resync: capture failed"; exit 1; }
+"$RTLOG" decode --contract "$OUT/crash.contract.jsonl" "$OUT/resync/resync.rtlog" 2>"$OUT/resync/clean.err" >/dev/null \
+  || { echo "resync: clean capture does not decode"; cat "$OUT/resync/clean.err"; exit 1; }
+grep -q "12000 records" "$OUT/resync/clean.err" || { echo "resync: expected 12000 records"; cat "$OUT/resync/clean.err"; exit 1; }
+[ "$(LC_ALL=C grep -c -a -o 'RTL1' "$OUT/resync/resync.rtlog")" -ge 3 ] || { echo "resync: no resync frames"; exit 1; }
+printf '\377%.0s' $(seq 80) | dd of="$OUT/resync/resync.rtlog" bs=1 seek=100000 conv=notrunc 2>/dev/null
+"$RTLOG" decode --contract "$OUT/crash.contract.jsonl" "$OUT/resync/resync.rtlog" 2>"$OUT/resync/bad.err" >/dev/null \
+  || { echo "resync: damaged capture did not recover"; cat "$OUT/resync/bad.err"; exit 1; }
+grep -q "stream gap" "$OUT/resync/bad.err" || { echo "resync: no gap reported"; cat "$OUT/resync/bad.err"; exit 1; }
+echo "resync: $(tail -1 "$OUT/resync/bad.err")"
 # Thread slots are freed when threads exit: 10 x RTLOG_MAX_THREADS short threads, no drops.
 "$OUT/crash" threads "$OUT/crash-threads-dir" || { echo "thread slots were not released"; exit 1; }
 echo "C and C++ end-to-end OK ($CC, $CXX)"
