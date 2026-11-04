@@ -1,8 +1,8 @@
 # Changelog
 
-## Unreleased
+## v0.2.1 — hardening after the v0.2.0 review
 
-Hardening after the v0.2.0 review ([details](https://github.com/NieWil/rtlog/pull/9)).
+Fixes from the v0.2.0 review ([PR #9](https://github.com/NieWil/rtlog/pull/9)). **API change:** `rtlog::crash::install` and `rtlog_crash_install` take a directory, not a file, and write `crash-<pid>-<n>.rtlog` in it.
 
 - **Crash log no longer depends on the drain.** The dump reads the rings through their own short-lived lock, so a crash while the drain is blocked in a transport write still captures every record; a test crashes a child with a stuck drain. Each dump is a new file, `<dir>/crash-<pid>-<n>.rtlog`: `install` now takes a directory, caught panics and snapshots never overwrite an earlier dump, and the panic hook never sleeps. Same for C (`rtlog_crash_install(dir)`).
 - **No ring leak without a drain.** A program that never installs a drain keeps the rings of at most the last 16 exited threads (`KEEP_WITHOUT_DRAIN`), not one per thread it ever ran.
