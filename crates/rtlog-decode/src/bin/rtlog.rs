@@ -4,6 +4,7 @@
 //! rtlog decode --contract app.contract.jsonl [--out text|json|perfetto] [-o FILE]
 //!              [--color auto|always|never] [--no-spans] [--force] app.rtlog
 //! rtlog check  app.contract.jsonl
+//! rtlog contract --elf firmware.elf -o firmware.contract.jsonl
 //! ```
 
 use std::io::{IsTerminal, Write};
@@ -15,6 +16,7 @@ const USAGE: &str = "usage:
   rtlog decode --contract <contract.jsonl> [--out text|json|perfetto] [-o <file>]
                [--color auto|always|never] [--no-spans] [--force] <stream.rtlog>
   rtlog check <contract.jsonl>
+  rtlog contract --elf <binary> [-o <contract.jsonl>]
 
   --json and --perfetto are short for --out json and --out perfetto.
   Perfetto output opens in https://ui.perfetto.dev (Open trace file).";
@@ -95,6 +97,34 @@ fn run(args: &[String]) -> Result<(), String> {
             let path = args.get(1).ok_or(USAGE)?;
             let c = load_contract(path)?;
             println!(
+                "{path}: {} sites, contract hash {:#010x}",
+                c.len(),
+                c.hash()
+            );
+            Ok(())
+        }
+        Some("contract") => {
+            let mut elf = None;
+            let mut out = None;
+            let mut it = args[1..].iter();
+            while let Some(a) = it.next() {
+                match a.as_str() {
+                    "--elf" => elf = it.next().cloned(),
+                    "-o" | "--output" => out = it.next().cloned(),
+                    s => return Err(format!("unknown argument {s}\n{USAGE}")),
+                }
+            }
+            let path = elf.ok_or(USAGE)?;
+            let data = std::fs::read(&path).map_err(|e| format!("{path}: {e}"))?;
+            let jsonl =
+                rtlog_decode::elf::contract_from_elf(&data).map_err(|e| format!("{path}: {e}"))?;
+            let c = Contract::from_jsonl(&jsonl)
+                .map_err(|e| format!("{path}: extracted contract is invalid: {e}"))?;
+            match out {
+                Some(o) => std::fs::write(&o, &jsonl).map_err(|e| format!("{o}: {e}"))?,
+                None => print!("{jsonl}"),
+            }
+            eprintln!(
                 "{path}: {} sites, contract hash {:#010x}",
                 c.len(),
                 c.hash()

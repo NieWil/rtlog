@@ -17,12 +17,15 @@ This file tracks how the code in `crates/` matches [the specification](spec.md):
 | 10 Perfetto / Chrome trace output | Built | `rtlog decode --perfetto`, `rtlog-decode/src/perfetto.rs` |
 | 10c Benchmark model: workloads W1–W5, timing report, Criterion | Built (host only) | `examples/timing.rs`, `benches/` |
 | Verification: soak test, Miri, ThreadSanitizer, AddressSanitizer | Built | `tests/soak.rs`, CI jobs `miri`, `sanitizers`, `soak` |
+| 4 Contract from the image (`cargo rtlog contract`) | Built as `rtlog contract --elf`, for Rust and C descriptors, PIE relocations applied | `rtlog-decode/src/elf.rs` |
+| C / C++ producer, Zephyr module | Built (Zephyr not CI-built) | `c/include/rtlog.h`, `c/zephyr`, `zephyr/module.yml` |
+| 10c Benchmarks in cycles, size on Cortex-M4F | Built | `examples/timing.rs`, `size/mcu`, `scripts/size_report.py` |
 | 5 resync, compression, AEAD; 8b crash log; 10 `log` / `tracing` / `defmt` bridges and OTLP / CTF outputs; shared memory | Not yet | — |
 
 ## Deviations from the spec
 
 1. **Argument types travel on the wire.** Each argument is one tag byte plus its value, and the contract records the argument count (`nargs`) instead of the type list. A `macro_rules!` macro cannot see argument types at expansion time, and a `static` cannot depend on them. The site ID therefore hashes module, file, line, column, format string, level and `nargs`. Cost: one byte per argument.
-2. **The contract is read from the running binary.** Sites are collected with `linkme` into a link section, and `rtlog::contract::write(path)` writes the JSON-lines file. Post-build extraction and stripping (`cargo rtlog contract`, `cargo rtlog verify`) are not built yet, so **format strings are still present in v0.1 binaries** and threat V2 is open.
+2. **The contract comes from the binary's descriptors.** Sites are collected with `linkme` into a link section. `rtlog::contract::write(path)` writes the JSON-lines file at runtime (`std`), and `rtlog contract --elf <image>` reads the same descriptors from any ELF image, firmware included. Stripping them (`cargo rtlog verify`) is not built yet, so **format strings are still present in v0.1 binaries** and threat V2 is open.
 3. **Not yet in the argument model:** `#[derive(Log)]`, `intern!`, `{:display}` / `{:debug}` (tier 4), and `#[rtlog(redact)]`.
 4. **Dynamic strings and byte slices are capped at 127 bytes.** The length byte uses bit 7 as the truncation flag, so the spec's `{:str<256>}` override cannot be encoded. Truncation keeps strings on a UTF-8 boundary.
 5. **Ring frames carry a 2-byte length prefix inside the ring** so the drain always hands whole frames to the transport. It never goes on the wire. Only `DropNewest` is implemented.
@@ -36,7 +39,9 @@ This file tracks how the code in `crates/` matches [the specification](spec.md):
 13. **Span frames carry a timestamp delta and context**, like log frames, followed by the spec's payload (span site ID, span ID, parent). Span names are span sites in the contract (`"kind":"span"`), not interned strings. Span IDs are context (16 bits) plus a per-context counter (48 bits). On `std` the parent is the thread's current span; with an explicit producer, `span_enter` / `span_exit` track it.
 14. **Registration does not block the drain.** A thread's first log call registers its ring through a separate pending list, and runtime counters are plain atomics. So a transport may log, call `stats()`, or start threads while the drain is inside `poll`. A regression test covers it.
 15. **Text output shows drops and spans** as `DROP` and `SPAN ▶ / ◀` lines, with span durations. Perfetto output turns numeric fields named in the format string (`err={}`) into counter tracks.
+16. **C and C++ site IDs are descriptor indices**, not content hashes: C has no compile-time string hashing. The ID is the descriptor's position in the `rtlog_sites` section plus one, so the log path does no hashing; `rtlog contract --elf` numbers the entries the same way.
+17. **Bare-metal descriptors** live in `linkme_SITES`; with `cortex-m-rt` a three-line `memory.x` addition keeps them in flash (see the embedded guide). The log path never reads a descriptor: a site's ID is a compile-time constant.
 
 ## Performance status
 
-The CI `timing` job prints the latest numbers to its summary page. On the GitHub runner (x86-64, release build), W1 measured 21.6 ns p50 per call against the spec target of ≤ 15 ns; about 13 ns of that is the TSC read. A timestamped `writeln!` into a buffer measured 67.5 ns, and a disabled site 0.4 ns. Closing the gap is open work: candidates are writing straight into the ring instead of through a stack buffer, and a cheaper thread-local lookup.
+Budgets are now in cycles (spec section 10c): ≤ 50 cycles per W1 call on x86-64 and aarch64. The CI `timing` jobs (x86-64 and arm64 runners) report ns and cycles, with a measured core clock; see [Performance and size](performance.md). v0.1 does not meet the budget yet: about a third of the cost is the timestamp read, and the rest is the thread-local lookup and a copy through a stack buffer.

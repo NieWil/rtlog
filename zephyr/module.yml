@@ -1,0 +1,5 @@
+# Zephyr module manifest: lets west pick rtlog up as a module.
+name: rtlog
+build:
+  cmake: c/zephyr
+  kconfig: c/zephyr/Kconfig

@@ -517,11 +517,13 @@ The benchmark answers four questions with numbers: cost per call, sustainable th
 
 **Expected results** (hypotheses to verify, not claims)
 
-| Logger | W1 latency | Drops under W4 | Strings in binary |
+Budgets are stated in CPU cycles, because a call's cost is a cycle count and its time is cycles ÷ clock: 50 cycles is 15 ns at 3.3 GHz but 500 ns at 100 MHz. Nanoseconds are quoted only for a named clock.
+
+| Logger | W1 cost | Drops under W4 | Strings in binary |
 | --- | --- | --- | --- |
-| This spec | 30–50 ns M4, 10–15 ns x86 | none up to ring capacity, then counted | none |
-| defmt | \~40–80 ns M4 (critical section) | blocks or drops depending on RTT mode | none |
-| NanoLog | \~7–18 ns x86 | none until 1 MB buffer full | none |
+| This spec | ≤ 50 cycles on x86-64 / aarch64 (≈ 15 ns at 3.3 GHz); ≤ 150 cycles on Cortex-M4 (1.5 µs at 100 MHz) until measured on hardware | none up to ring capacity, then counted | none |
+| defmt | to be measured in cycles on the same board (critical section per frame) | blocks or drops depending on RTT mode | none |
+| NanoLog | \~7–18 ns on x86 per its paper (≈ 25–60 cycles at 3.3 GHz) | none until 1 MB buffer full | none |
 | spdlog async | 100–300 ns | queue policy: block or overrun | yes |
 | `tracing` fmt | 300–1 000 ns | writer blocks | yes |
 | printf / semihosting | 10–100 µs | blocks | yes |
@@ -565,7 +567,7 @@ Fourteen decisions are settled and the spec is implementable for `core` and `dec
 **Tests and benchmarks**
 
 - `tests/vectors/*.rtlog` with expected JSON lines; every decoder implementation must pass them, and every wire or contract-schema change adds vectors.
-- Criterion benches on `std` for the log call, the ring round trip and the drain; a cycle-count test on a Cortex-M4 board in CI through `probe-rs`, failing above 50 ns at 100 MHz. x86-64 target ≤ 15 ns. Results published in the README on each release.
+- Criterion benches on `std` for the log call, the ring round trip and the drain; a cycle-count test on a Cortex-M4 board in CI through `probe-rs`, failing above 150 cycles per W1 call (a placeholder until the first hardware measurement). x86-64 and aarch64 target ≤ 50 cycles per W1 call. Results published on each release.
 - Fuzzing of the decoder against random and truncated streams (`cargo fuzz`), since field captures are untrusted input.
 
 **Status**
@@ -585,7 +587,7 @@ Fourteen decisions are settled and the spec is implementable for `core` and `dec
 1. v0.1: `rtlog-core` (`no_std` rings, macro, contract writer), `rtlog-decode` text/JSON, RTT and file transports, Cortex-M and Linux examples.
 2. v0.2: `tracing` and `log` backends, OTLP and Perfetto outputs, `cargo rtlog` contract checker.
 3. v0.3: `elf-ids` feature, CTF output, DMA UART transport, drain compression on `std`.
-4. v1.0: wire format frozen, contract schema versioned, bench suite published (target: < 50 ns per call on Cortex-M4 at 100 MHz, < 15 ns on x86-64).
+4. v1.0: wire format frozen, contract schema versioned, bench suite published (targets in cycles per W1 call: ≤ 50 on x86-64 and aarch64, Cortex-M4 budget set from the first hardware measurement; v0.1 placeholder ≤ 150).
 
 **Sources**
 

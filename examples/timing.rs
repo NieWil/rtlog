@@ -5,6 +5,12 @@
 //! the per-batch mean. A text-formatting baseline shows what the same call
 //! costs when it formats on the spot, like `println!` or `env_logger`.
 //!
+//! Costs are reported in nanoseconds and in core cycles. A call's cost is a
+//! cycle count; its time is cycles ÷ clock, so cycles compare across machines.
+//! The core clock is measured, not read from the OS: a chain of dependent
+//! integer adds runs at one add per cycle on every core this targets, so
+//! timing a long chain gives cycles per nanosecond.
+//!
 //! `cargo run --release -p rtlog-examples --example timing [-- --out report.md]`
 
 use std::fmt::Write as _;
@@ -53,6 +59,92 @@ fn measure(mut call: impl FnMut(usize), mut after: impl FnMut()) -> Stat {
     stats(per_call)
 }
 
+/// Run `n` iterations of 8 dependent adds; returns `Some(8 * n)` adds executed,
+/// or `None` on an architecture without the asm loop.
+#[allow(unused_variables, unused_mut)]
+fn add_chain(n: u64) -> Option<u64> {
+    let mut x = 0u64;
+    let mut i = n;
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        std::arch::asm!(
+            "2:",
+            "add {x}, 1", "add {x}, 1", "add {x}, 1", "add {x}, 1",
+            "add {x}, 1", "add {x}, 1", "add {x}, 1", "add {x}, 1",
+            "dec {i}",
+            "jnz 2b",
+            x = inout(reg) x => _, i = inout(reg) i => _,
+            options(nomem, nostack),
+        );
+        return Some(8 * n);
+    }
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        std::arch::asm!(
+            "2:",
+            "add {x}, {x}, #1", "add {x}, {x}, #1", "add {x}, {x}, #1", "add {x}, {x}, #1",
+            "add {x}, {x}, #1", "add {x}, {x}, #1", "add {x}, {x}, #1", "add {x}, {x}, #1",
+            "subs {i}, {i}, #1",
+            "b.ne 2b",
+            x = inout(reg) x => _, i = inout(reg) i => _,
+            options(nomem, nostack),
+        );
+        return Some(8 * n);
+    }
+    #[cfg(target_arch = "riscv64")]
+    unsafe {
+        std::arch::asm!(
+            "2:",
+            "addi {x}, {x}, 1", "addi {x}, {x}, 1", "addi {x}, {x}, 1", "addi {x}, {x}, 1",
+            "addi {x}, {x}, 1", "addi {x}, {x}, 1", "addi {x}, {x}, 1", "addi {x}, {x}, 1",
+            "addi {i}, {i}, -1",
+            "bnez {i}, 2b",
+            x = inout(reg) x => _, i = inout(reg) i => _,
+            options(nomem, nostack),
+        );
+        return Some(8 * n);
+    }
+    #[allow(unreachable_code)]
+    None
+}
+
+/// Measured core clock in GHz (cycles per ns): best of several runs.
+fn core_ghz() -> Option<f64> {
+    let n = 4_000_000u64;
+    add_chain(n / 10)?; // warm up the core's clock
+    (0..7)
+        .map(|_| {
+            let t = Instant::now();
+            let adds = add_chain(n).unwrap();
+            adds as f64 / t.elapsed().as_nanos() as f64
+        })
+        .reduce(f64::max)
+}
+
+fn cpu_model() -> String {
+    if let Ok(info) = std::fs::read_to_string("/proc/cpuinfo") {
+        for key in ["model name", "Model", "Hardware", "uarch", "isa"] {
+            if let Some(v) = info
+                .lines()
+                .find(|l| l.split(':').next().is_some_and(|k| k.trim() == key))
+                .and_then(|l| l.split_once(':'))
+            {
+                return v.1.trim().to_owned();
+            }
+        }
+    }
+    if let Ok(out) = std::process::Command::new("sysctl")
+        .args(["-n", "machdep.cpu.brand_string"])
+        .output()
+    {
+        let s = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+        if !s.is_empty() {
+            return s;
+        }
+    }
+    std::env::var("PROCESSOR_IDENTIFIER").unwrap_or_else(|_| "unknown".to_owned())
+}
+
 /// Transport that discards frames, so the report times the logger, not I/O.
 struct Discard;
 
@@ -62,10 +154,11 @@ impl rtlog::Transport for Discard {
     }
 }
 
-fn row(out: &mut String, name: &str, what: &str, s: &Stat) {
+fn row(out: &mut String, ghz: Option<f64>, name: &str, what: &str, s: &Stat) {
+    let cycles = ghz.map_or("n/a".to_owned(), |g| format!("{:.0}", s.p50 * g));
     writeln!(
         out,
-        "| {name} | {what} | {:.1} | {:.1} | {:.1} | {:.1} |",
+        "| {name} | {what} | {:.1} | {:.1} | {:.1} | {:.1} | {cycles} |",
         s.min, s.p50, s.p99, s.max
     )
     .unwrap();
@@ -79,8 +172,33 @@ fn main() {
         d.poll().unwrap();
     };
 
+    let ghz = core_ghz();
     let mut r = String::new();
     writeln!(r, "## rtlog timing report\n").unwrap();
+    writeln!(r, "| Platform | |\n| --- | --- |").unwrap();
+    writeln!(r, "| CPU | {} |", cpu_model()).unwrap();
+    writeln!(
+        r,
+        "| Measured core clock | {} |",
+        ghz.map_or(
+            "n/a (no add-chain loop for this architecture)".to_owned(),
+            |g| format!("{g:.2} GHz")
+        )
+    )
+    .unwrap();
+    writeln!(
+        r,
+        "| Timestamp counter | {}, {:.1} MHz |",
+        match (rtlog::clock::source(), std::env::consts::ARCH) {
+            (rtlog::clock::Source::Counter, "x86_64") => "TSC ÷ 2",
+            (rtlog::clock::Source::Counter, "aarch64") => "CNTVCT_EL0",
+            (rtlog::clock::Source::Counter, _) => "CPU counter",
+            (rtlog::clock::Source::Instant, _) => "Instant (ns)",
+        },
+        f64::from(rtlog::clock::hz()) / 1e6
+    )
+    .unwrap();
+    writeln!(r, "| Target | `{}` |\n", std::env::consts::ARCH).unwrap();
     writeln!(
         r,
         "{} batches × {} calls, per-call mean of each batch in ns; ring drained between batches. \
@@ -95,8 +213,12 @@ fn main() {
         std::env::consts::ARCH
     )
     .unwrap();
-    writeln!(r, "| Workload | Call | min | p50 | p99 | max |").unwrap();
-    writeln!(r, "| --- | --- | ---: | ---: | ---: | ---: |").unwrap();
+    writeln!(
+        r,
+        "| Workload | Call | min ns | p50 ns | p99 ns | max ns | p50 cycles |"
+    )
+    .unwrap();
+    writeln!(r, "| --- | --- | ---: | ---: | ---: | ---: | ---: |").unwrap();
 
     let clock = measure(
         |_| {
@@ -106,13 +228,20 @@ fn main() {
     );
     row(
         &mut r,
+        ghz,
         "Clock read",
         &format!("`clock::now()` ({:?} source)", rtlog::clock::source()),
         &clock,
     );
 
     let w1 = measure(|i| rtlog::info!("x={} y={}", i as u32, 7u32), &mut drain);
-    row(&mut r, "W1 scalar", "`info!(\"x={} y={}\", u32, u32)`", &w1);
+    row(
+        &mut r,
+        ghz,
+        "W1 scalar",
+        "`info!(\"x={} y={}\", u32, u32)`",
+        &w1,
+    );
 
     let w2 = measure(
         |i| {
@@ -128,11 +257,11 @@ fn main() {
         },
         &mut drain,
     );
-    row(&mut r, "W2 struct", "6 mixed fields", &w2);
+    row(&mut r, ghz, "W2 struct", "6 mixed fields", &w2);
 
     let s32 = "0123456789abcdef0123456789abcdef";
     let w3 = measure(|_| rtlog::info!("name={}", s32), &mut drain);
-    row(&mut r, "W3 string", "32-byte `&str`", &w3);
+    row(&mut r, ghz, "W3 string", "32-byte `&str`", &w3);
 
     let disabled = {
         rtlog::set_level(rtlog::Level::Warn);
@@ -142,6 +271,7 @@ fn main() {
     };
     row(
         &mut r,
+        ghz,
         "Disabled",
         "`debug!` below runtime level",
         &disabled,
@@ -158,6 +288,7 @@ fn main() {
     );
     row(
         &mut r,
+        ghz,
         "Baseline",
         "`write!` same W1 text into a `String`",
         &text,
@@ -186,6 +317,7 @@ fn main() {
     );
     row(
         &mut r,
+        ghz,
         "Baseline",
         "`writeln!` timestamped W1 line into a buffer",
         &fmt_io,
@@ -211,6 +343,7 @@ fn main() {
     let w5 = stats(per_thread);
     row(
         &mut r,
+        ghz,
         "W5 contended",
         "8 threads × 2 000 W1 calls, per-thread mean",
         &w5,
@@ -286,17 +419,24 @@ fn main() {
         rtlog::stats().drops - drops_before
     )
     .unwrap();
-    writeln!(
-        r,
-        "\nSpec target (section 11): ≤ 15 ns per W1 call on x86-64; this run: p50 {:.1} ns ({}).",
-        w1.p50,
-        if w1.p50 <= 15.0 {
-            "met"
-        } else {
-            "not met on this machine"
+    match ghz {
+        Some(g) => {
+            let cycles = w1.p50 * g;
+            writeln!(
+                r,
+                "\nSpec budget (section 10c): ≤ 50 cycles per W1 call on x86-64 / aarch64. \
+                 This run: {cycles:.0} cycles ({:.1} ns at {g:.2} GHz), {}.",
+                w1.p50,
+                if cycles <= 50.0 { "met" } else { "not met" }
+            )
+            .unwrap();
         }
-    )
-    .unwrap();
+        None => writeln!(
+            r,
+            "\nSpec budget: ≤ 50 cycles per W1 call; core clock not measured on this architecture."
+        )
+        .unwrap(),
+    }
 
     print!("{r}");
     if let Some(p) = out_path {

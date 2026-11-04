@@ -6,3 +6,10 @@ members = ["crates/rtlog-core", "crates/rtlog-decode", "examples"]
 version = "0.1.0"
 edition = "2021"
 repository = "https://github.com/NieWil/rtlog"
+
+# Optimised profile for release binaries: `cargo build --profile dist`.
+[profile.dist]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+strip = true
