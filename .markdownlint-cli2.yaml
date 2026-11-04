@@ -1,0 +1,9 @@
+config:
+  default: true
+  MD013: false        # line length: prose is one line per paragraph
+  MD033: false        # inline HTML
+  MD036: false        # bold lines used as sub-headings
+  MD024:
+    siblings_only: true
+globs:
+  - "**/*.md"
