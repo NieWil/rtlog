@@ -1,0 +1,8 @@
+[workspace]
+resolver = "2"
+members = ["crates/rtlog-core", "crates/rtlog-decode", "examples"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+repository = "https://github.com/NieWil/rtlog"

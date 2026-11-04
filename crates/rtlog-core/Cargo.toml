@@ -1,0 +1,23 @@
+[package]
+name = "rtlog-core"
+description = "Lock-free, allocation-free deferred logger core (no_std)"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+
+[lib]
+name = "rtlog"
+
+[features]
+default = ["std"]
+std = []
+
+[dependencies]
+linkme = "0.3"
+
+[dev-dependencies]
+criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
+
+[[bench]]
+name = "log_call"
+harness = false

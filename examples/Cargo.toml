@@ -1,0 +1,21 @@
+[package]
+name = "rtlog-examples"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+rtlog-core = { path = "../crates/rtlog-core" }
+rtlog-decode = { path = "../crates/rtlog-decode" }
+
+[[example]]
+name = "basic"
+path = "basic.rs"
+
+[[example]]
+name = "static_rings"
+path = "static_rings.rs"
+
+[[example]]
+name = "timing"
+path = "timing.rs"
