@@ -3,6 +3,7 @@ name = "rtlog-core"
 description = "Lock-free, allocation-free deferred logger core (no_std)"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 repository.workspace = true
 
 [lib]

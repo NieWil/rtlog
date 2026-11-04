@@ -8,6 +8,7 @@ You write `println!`-style log lines. The device writes a few binary bytes into 
 ![no_std](https://img.shields.io/badge/no__std-yes-2ea44f)
 ![languages](https://img.shields.io/badge/Rust%20%C2%B7%20C%20%C2%B7%20C%2B%2B%20%C2%B7%20Zephyr-informational)
 ![status](https://img.shields.io/badge/status-v0.1%20preview-orange)
+![licence](https://img.shields.io/badge/licence-MIT%20%2F%20Apache--2.0-blue)
 
 ![What you write, what goes on the wire, what you read](docs/images/hero.svg)
 
@@ -69,4 +70,8 @@ Each call site gets an ID at build time; its format string goes into a contract 
 
 v0.1 preview. Every CI run tests it on Linux, macOS, Windows, and on arm64, ARMv7, RISC-V and x86 under QEMU. Each run also includes a 2-minute soak test, Miri, and Thread and Address sanitizers. Before 1.0: strip format strings from shipped binaries, reach the ≤ 50-cycle budget per call, and add `derive(Log)` and the `log` / `tracing` / `defmt` bridges.
 
-**Licence:** not chosen yet. The spec proposes MIT / Apache-2.0 dual licensing.
+## Licence
+
+Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT licence](LICENSE-MIT), at your option.
+
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in rtlog by you, as defined in the Apache-2.0 licence, shall be dual licensed as above, without any additional terms or conditions.

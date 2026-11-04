@@ -543,7 +543,7 @@ Budgets are stated in CPU cycles, because a call's cost is a cycle count and its
 
 ## 11. Open questions and roadmap
 
-Fourteen decisions are settled and the spec is implementable for `core` and `decode`; the items under Open questions are the only things still to choose.
+Fifteen decisions are settled and the spec is implementable for `core` and `decode`; the items under Open questions are the only things still to choose.
 
 **Decision log**
 
@@ -563,6 +563,7 @@ Fourteen decisions are settled and the spec is implementable for `core` and `dec
 | 12 | Tests | Conformance vectors, Criterion on `std`, Cortex-M cycle test in CI |
 | 13 | Debug stdout | `std` only; MCU uses the host tool |
 | 14 | Naming | `rtlog` everywhere: crates `rtlog-*`, macros `rtlog::`, CLI `rtlog`, files `.rtlog`, env `RTLOG_*` |
+| 15 | Licence | MIT OR Apache-2.0, at the user's option |
 
 **Tests and benchmarks**
 
@@ -580,7 +581,7 @@ Fourteen decisions are settled and the spec is implementable for `core` and `dec
 - [ ] `DropOldest` needs a per-frame length byte in the ring; pay it everywhere or make the ring layout depend on the policy?
 - [ ] Contract delivery in the field: hash only, or a compressed contract in a flash region for self-describing devices?
 - [ ] Key provisioning interface for the AEAD key: trait with a single `key(id) -> &[u8; 32]`, or integrate with an existing secure-element API?
-- [ ] Licence for the open-source release (proposal: MIT/Apache-2 dual).
+- [x] Licence for the open-source release: MIT OR Apache-2.0, dual (decision 15).
 
 **Roadmap**
 

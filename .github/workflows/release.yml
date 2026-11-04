@@ -63,7 +63,7 @@ jobs:
           mkdir -p "dist/$name"
           bin=target/${{ matrix.target }}/dist/rtlog
           [ -f "$bin.exe" ] && bin="$bin.exe"
-          cp "$bin" README.md "dist/$name/"
+          cp "$bin" README.md LICENSE-MIT LICENSE-APACHE "dist/$name/"
           cd dist
           if [ "${{ runner.os }}" = "Windows" ]; then 7z a "$name.zip" "$name" >/dev/null; else tar czf "$name.tar.gz" "$name"; fi
           ls -la
@@ -83,7 +83,7 @@ jobs:
         run: |
           name=rtlog-c-${{ github.ref_type == 'tag' && github.ref_name || 'dev' }}
           mkdir -p "dist/$name"
-          cp -r c/include c/examples c/zephyr zephyr docs/c-cpp.md docs/zephyr.md "dist/$name/"
+          cp -r c/include c/examples c/zephyr zephyr docs/c-cpp.md docs/zephyr.md LICENSE-MIT LICENSE-APACHE "dist/$name/"
           tar czf "dist/$name.tar.gz" -C dist "$name"
       - uses: actions/upload-artifact@v4
         with:
