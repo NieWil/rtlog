@@ -398,6 +398,11 @@ impl<const N: usize> Ring<N> {
                 return; // torn by a concurrent writer: stop rather than read garbage
             }
             self.read_at(pos.wrapping_add(LEN_PREFIX), &mut scratch[..len]);
+            // A consumer that moved past this frame meanwhile may have let the
+            // producer overwrite it: stop rather than hand out garbage.
+            if (self.tail.load(Ordering::Acquire).wrapping_sub(pos) as isize) > 0 {
+                return;
+            }
             if !f(&scratch[..len]) {
                 return;
             }
@@ -469,10 +474,14 @@ impl<'a, const N: usize> Producer<'a, N> {
     }
 
     /// Open a span named by span site `site`, nested in the current one.
+    /// Returns an inert span (`id == 0`) when spans are off ([`crate::set_spans`]).
     pub fn span_enter(&mut self, site: u32) -> SpanId {
-        self.span_seq += 1;
-        let id = (u64::from(self.ring.ctx() & 0xffff) << 48) | (self.span_seq & 0xffff_ffff_ffff);
         let parent = self.current_span;
+        if !crate::level::spans_enabled() {
+            return SpanId { id: 0, parent };
+        }
+        self.span_seq += 1;
+        let id = (u64::from(self.ring.ctx()) << 32) | (self.span_seq & 0xffff_ffff);
         let payload = crate::wire::span_open_payload(site, id, parent);
         if self.push(crate::wire::CTRL_SPAN_OPEN, &payload) {
             self.current_span = id;

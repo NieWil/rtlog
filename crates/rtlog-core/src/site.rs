@@ -176,9 +176,38 @@ pub const fn count_placeholders(fmt: &str) -> usize {
     n
 }
 
+/// Whether `fmt` uses an inline capture such as `{x}` or `{x:?}`: a `{` whose
+/// first character is an identifier start. `{}`, `{:?}`, `{:x}` and `{{` are not.
+pub const fn has_inline_capture(fmt: &str) -> bool {
+    let b = fmt.as_bytes();
+    let mut i = 0;
+    while i + 1 < b.len() {
+        if b[i] == b'{' {
+            let c = b[i + 1];
+            if c == b'{' {
+                i += 2;
+                continue;
+            }
+            if c == b'_' || c.is_ascii_alphabetic() {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inline_captures_are_detected() {
+        assert!(has_inline_capture("x={x}"));
+        assert!(has_inline_capture("{_v:?}"));
+        assert!(!has_inline_capture("x={} {:?} {:>8} {{x}}"));
+        assert!(!has_inline_capture("{"));
+    }
 
     #[test]
     fn placeholders() {

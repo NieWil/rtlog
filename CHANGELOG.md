@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+Hardening after the v0.2.0 review ([details](https://github.com/NieWil/rtlog/pull/9)).
+
+- **Crash log no longer depends on the drain.** The dump reads the rings through their own short-lived lock, so a crash while the drain is blocked in a transport write still captures every record; a test crashes a child with a stuck drain. Each dump is a new file, `<dir>/crash-<pid>-<n>.rtlog`: `install` now takes a directory, caught panics and snapshots never overwrite an earlier dump, and the panic hook never sleeps. Same for C (`rtlog_crash_install(dir)`).
+- **No ring leak without a drain.** A program that never installs a drain keeps the rings of at most the last 16 exited threads (`KEEP_WITHOUT_DRAIN`), not one per thread it ever ran.
+- **C: thread slots are freed when threads exit** (pthread TLS destructor), so a thread pool never runs out of `RTLOG_MAX_THREADS`; calls that find no slot are reported as drops on context 0. The C crash dump keeps the drain out while it reads.
+- **Spans are independent of the level**: `set_spans(false)` / `rtlog_set_spans(0)` removes them, `set_level(Warn)` no longer does. Span IDs carry the full 32-bit context (was 16), so they stay unique past 65 536 threads.
+- `info!("x={x}")` (inline capture) is now a clear compile error; write `"x={}", x`.
+- The cycle budget is reported, not gated, in CI (shared runners vary by 10–20 cycles); sizes on Cortex-M4F stay gated. `--strict-timing` gates it on a dedicated machine.
+- Spec: sections describing planned work moved to [docs/roadmap.md](https://github.com/NieWil/rtlog/blob/main/docs/roadmap.md); `docs/spec.md` now describes only what is implemented.
+
 ## v0.2.0 — faster log call, crash log, stdout mode, device demo
 
 - Faster log call: frames are encoded in place in the ring (82 instructions per W1 call on x86-64, down from 198): 36 cycles on x86-64 and 46 on arm64 in CI, within the spec’s 50-cycle budget; on bare metal one shared push keeps per-call-site code at about 56 bytes.

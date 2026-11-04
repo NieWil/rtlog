@@ -225,7 +225,7 @@ jobs:
       - name: Size on Cortex-M4F
         if: matrix.arch == 'x86_64'
         run: python3 scripts/size_report.py --out size.md
-      - name: Check the spec's rules (real-time, wire, usability, performance, memory)
+      - name: Check the spec's rules (real-time, wire, usability, memory; performance reported)
         run: |
           size_arg=""
           [ -f size.md ] && size_arg="--size size.md"

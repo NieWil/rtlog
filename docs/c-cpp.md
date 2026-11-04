@@ -55,16 +55,18 @@ rtlog decode --contract demo.contract.jsonl --perfetto -o demo.json demo.rtlog
 | `RTLOG_SPAN(var, name)` | Scoped span (C++) |
 | `rtlog_drain(write, user)` | Move pending frames to a transport; call from one place |
 | `rtlog_set_thread_name(name)` | Name the calling thread's track |
-| `rtlog_thread_exit()` | Release the thread's ring when the thread ends |
+| `rtlog_thread_exit()` | Release the thread's ring slot early; on POSIX it is released by itself when the thread exits |
 | `rtlog_set_clock(now, hz)` | Use your own clock (DWT, RTOS tick); POSIX defaults to `CLOCK_MONOTONIC` |
 | `rtlog_set_level(level)` | Runtime level filter |
+| `rtlog_set_spans(on)` | Record spans or not, independently of the level |
 | `rtlog_dropped()` | Frames dropped so far |
+| `rtlog_crash_install(dir)` / `rtlog_crash_snapshot(reason)` | Crash log (POSIX): dumps to `<dir>/crash-<pid>-<n>.rtlog`; see [When the process crashes](crash.md) |
 
 Supported argument types: `bool`, `char`, all integer types, `float`, `double`, `const char *` (and `std::string` in C++). Strings are capped at 127 bytes.
 
 ## How it works
 
-- Each thread claims one of `RTLOG_MAX_THREADS` static rings (`RTLOG_RING_SIZE` bytes each) on its first log call. There is no `malloc`.
+- Each thread claims one of `RTLOG_MAX_THREADS` static rings (`RTLOG_RING_SIZE` bytes each) on its first log call. There is no `malloc`. On POSIX the slot is closed by a thread-local destructor when the thread exits and freed by the next `rtlog_drain`, so a thread pool that creates many threads over its life never runs out; on other targets call `rtlog_thread_exit()` at the end of each thread. A call that finds no free slot is counted and reported as a drop on context 0.
 - A call site's descriptor (level, format string, file, line) goes into the `rtlog_sites` ELF section. The ID written on the wire is the descriptor's index in that section, so the log path does no hashing and never reads a string.
 - `rtlog contract --elf` reads the section on the host, applying load-time relocations for position-independent executables.
 
@@ -73,6 +75,6 @@ Supported argument types: `bool`, `char`, all integer types, `float`, `double`, 
 - GCC or Clang on an ELF target: Linux, Zephyr, bare metal. Not MSVC, macOS or Windows.
 - Little-endian only.
 - Format strings remain in `.rodata`; stripping them from shipped images is on the roadmap.
-- Without `rtlog_thread_exit()`, a finished thread keeps its ring slot.
+- Without pthreads (Zephyr, bare metal), a finished thread keeps its ring slot until `rtlog_thread_exit()`.
 
 For Zephyr, see [Zephyr](zephyr.md).
