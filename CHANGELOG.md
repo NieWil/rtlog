@@ -13,6 +13,17 @@ Fixes from an independent review of v0.2.1, and the decoder resync that was the 
 - **Rings kept without a drain**: the most recently *finished* threads are kept (it was the oldest registered), and the bound applies again if a drain is dropped.
 - Stdout mode: a drop report arriving first no longer made every later timestamp print as absolute ticks.
 - C++: `{x}` in a format string is a `static_assert`, as in Rust. `scripts/spec_check.py` compares the resync frame ID across Rust, C and the decoder.
+- Add a shared STM32 hardware stress comparison for rtlog and Zephyr deferred
+  logging: overload, paused consumers, dynamic payloads, timer interference,
+  and drop accounting/recovery checks. Record three runs per logger in the
+  [stress report](docs/stm32-stress.md).
+- Build the STM32L432KC benchmark with Zephyr 4.2 / SDK 0.17.2, add a deferred
+  Zephyr logger comparator and matched ten-site footprint builds, and record
+  measured static flash/RAM sizes and three hardware cycle runs per logger in the
+  [STM32 comparison report](docs/stm32-comparison.md).
+- Add a Zephyr Cortex-M cycle benchmark with serial CSV reporting, explicit
+  successful-write and full-ring checks, and NUCLEO-L432KC build/flash instructions
+  in [the Zephyr guide](docs/zephyr.md).
 
 ## v0.2.1 — hardening after the v0.2.0 review
 

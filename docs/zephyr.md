@@ -71,3 +71,123 @@ rtlog decode --contract app.contract.jsonl --perfetto -o app.json app.rtlog
 | `CONFIG_RTLOG_DRAIN_PRIORITY` | 14 | Drain thread priority |
 
 The module needs thread-local storage (`CONFIG_THREAD_LOCAL_STORAGE`), which it selects. The timestamp clock is the hardware cycle counter (`k_cycle_get_64`, or an extended 32-bit counter).
+
+## Measure on a NUCLEO-L432KC
+
+See the [STM32 comparison report](stm32-comparison.md) for verified Zephyr 4.2
+builds, measured rtlog/Zephyr cycle costs at 80 MHz, matched flash and RAM
+measurements, and WSL flash-access requirements.
+The [stress report](stm32-stress.md) adds overload, paused-consumer, dynamic
+payload, interrupt-interference, and recovery measurements on the board.
+
+The [benchmark sample](../c/zephyr/samples/benchmark) measures the C logger on
+the STM32L432KC's Cortex-M4 using its DWT core-cycle counter. Connect the board's
+ST-LINK USB port: it provides flashing/debugging and a virtual serial port to
+the MCU's console UART. This is not native USB CDC firmware on the STM32.
+
+### Build and flash
+
+First install the host dependencies from Zephyr's
+[getting started guide](https://docs.zephyrproject.org/latest/develop/getting_started/index.html).
+If you do not already have a Zephyr workspace and SDK, a typical setup is:
+
+```sh
+python3 -m venv ~/.venvs/zephyr
+. ~/.venvs/zephyr/bin/activate
+pip install west
+west init ~/zephyrproject
+cd ~/zephyrproject
+west update
+west zephyr-export
+pip install -r zephyr/scripts/requirements.txt
+cd zephyr
+west sdk install --toolchains arm-zephyr-eabi
+```
+
+With that environment active, build from your Zephyr workspace, adding the rtlog
+checkout as an extra module. Change `RTLOG_DIR` to your checkout's absolute path:
+
+```sh
+export RTLOG_DIR=/absolute/path/to/rtlog
+cd ~/zephyrproject
+west build -d build/rtlog-benchmark -b nucleo_l432kc \
+  "$RTLOG_DIR/c/zephyr/samples/benchmark" -- \
+  -DZEPHYR_EXTRA_MODULES="$RTLOG_DIR"
+west flash -d build/rtlog-benchmark --runner openocd
+```
+
+The board target is `nucleo_l432kc`, not the MCU part number. See the
+[Zephyr board guide](https://docs.zephyrproject.org/latest/boards/st/nucleo_l432kc/doc/index.html)
+for the console pins, flash runners, and board-specific requirements. The command
+above requires OpenOCD (from the SDK host tools or your host installation);
+omitting `--runner openocd` uses the board's default STM32CubeProgrammer runner,
+which requires a separate STM32CubeProgrammer installation. Linux
+needs the appropriate ST-LINK udev rules and serial-device permissions. If
+flashing fails with a permission error, follow that guide rather than running
+the build as root.
+
+### Capture the report
+
+Open the ST-LINK serial device at **115200 baud, 8N1, no flow control** before
+pressing the board's reset button. On Linux it is usually `/dev/ttyACM0`; prefer
+its stable name under `/dev/serial/by-id/` if multiple boards are attached.
+
+```sh
+stty -F /dev/ttyACM0 115200 raw -echo -ixon -ixoff -crtscts
+cat /dev/ttyACM0 | tee rtlog-benchmark.csv
+```
+
+Press reset, wait for `RTLOG_BENCH_DONE`, then stop capture with Ctrl-C. There is
+a two-second startup delay. Close other serial monitors before capturing.
+
+The report starts with the actual `core_hz`, the logger's Zephyr
+`timestamp_hz`, sample count, ring size, and number of thread slots, followed by:
+
+```text
+case,min_cycles,median_cycles,p95_cycles,max_cycles,drops
+```
+
+Rows cover the empty timing baseline, a runtime-disabled debug call, an enabled
+call with no arguments, one and three `uint32_t` arguments, a seven-byte string,
+a span begin/end pair, and a call when the ring is full. All values are raw
+**core cycles**, including the counter-read and wrapper overhead; the baseline
+shows that overhead rather than silently subtracting it. A span row measures
+both calls together. To estimate nanoseconds use
+`cycles * 1_000_000_000 / core_hz`, not the timestamp frequency. Do not assume
+that the board runs at its maximum supported clock.
+
+The sample uses speed optimization, one 2048-byte ring, 256 observations per
+case, and no background drain thread. It warms each case and drains to a
+discard sink every 16 observations, outside the timed interval. Interrupts are
+masked only around each timed operation: these are uncontended producer-cost
+measurements, not application latency with interrupts and scheduling. The
+logger still uses the module's normal Zephyr timestamp callback; DWT is only
+the measurement clock. A debugger must not halt or single-step during a run.
+First-use ring registration is excluded.
+
+Successful-write rows must have zero drops; the full-ring row must have exactly
+256, excluding the untimed prefill. Otherwise the sample prints
+`RTLOG_BENCH_ERROR` instead of the completion marker. The counter is checked
+at startup; unsupported/non-running DWT counters also produce an error.
+
+This sample prints **text only**: binary frames go to the discard sink. Do not
+feed its CSV to `rtlog decode`. It measures the logger call path, not UART/USB
+throughput, and its firmware footprint includes the reporting code and sample
+array. For whole-image RAM/ROM breakdowns:
+
+```sh
+west build -d build/rtlog-benchmark -t ram_report
+west build -d build/rtlog-benchmark -t rom_report
+```
+
+To test end-to-end logging, build the existing
+[hello sample](../c/zephyr/samples/hello) with the same board and extra-module
+argument in a separate build directory, then use the binary capture and decode
+steps above. Keep text output off that binary UART. At 115200 baud, 8N1 carries
+at most 11,520 payload bytes/s before framing costs; a sustained producer rate
+above the transport capacity will drop records even when each call is fast.
+
+Record the Zephyr revision, compiler version, board, reported clock, optimization
+settings, and ring configuration with any results. Repeat after resetting the
+board. Host timings and the spec's existing Rust benchmarks are not measured
+STM32 C/Zephyr performance results.
