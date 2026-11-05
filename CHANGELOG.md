@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.2.2 — review fixes, decoder resync, STM32/Zephyr benchmarks
 
 Fixes from an independent review of v0.2.1, and the decoder resync that was the top open item.
 
@@ -24,6 +24,7 @@ Fixes from an independent review of v0.2.1, and the decoder resync that was the 
 - Add a Zephyr Cortex-M cycle benchmark with serial CSV reporting, explicit
   successful-write and full-ring checks, and NUCLEO-L432KC build/flash instructions
   in [the Zephyr guide](docs/zephyr.md).
+- Docs: the first Cortex-M hardware measurement is now referenced from the spec, the performance guide and the roadmap. On an STM32L432KC at 80 MHz the C/Zephyr path takes 447 median cycles for one `u32` and 520 for three, about three times the spec's ≤ 150-cycle placeholder, which is unchanged: optimising that path is the next step on the roadmap.
 
 ## v0.2.1 — hardening after the v0.2.0 review
 
