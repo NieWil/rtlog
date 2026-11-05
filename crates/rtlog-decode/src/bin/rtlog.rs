@@ -86,11 +86,19 @@ fn run(args: &[String]) -> Result<(), String> {
                 }
             }
             eprintln!(
-                "{} records, {} spans, {} contexts, {} dropped{}",
+                "{} records, {} spans, {} contexts, {} dropped{}{}",
                 d.records,
                 d.spans,
                 d.contexts,
                 d.dropped,
+                if d.gaps > 0 {
+                    format!(
+                        ", {} stream gap(s) ({} bytes skipped, resumed at resync frames)",
+                        d.gaps, d.skipped_bytes
+                    )
+                } else {
+                    String::new()
+                },
                 out_file.map(|f| format!(" -> {f}")).unwrap_or_default()
             );
             match d.error {

@@ -55,8 +55,8 @@ pub use site::{Site, SiteKind};
 pub use drain::IoTransport;
 #[cfg(feature = "std")]
 pub use runtime::{
-    set_context_name, spawn_drain, stats, Drain, DrainHandle, SpanGuard, Stats, KEEP_WITHOUT_DRAIN,
-    THREAD_RING,
+    __context_names, set_context_name, spawn_drain, stats, Drain, DrainHandle, SpanGuard, Stats,
+    KEEP_WITHOUT_DRAIN, THREAD_RING,
 };
 
 #[doc(hidden)]

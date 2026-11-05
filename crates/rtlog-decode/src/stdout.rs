@@ -87,7 +87,7 @@ impl<W: Write> rtlog::Transport for TextTransport<W> {
                 return Ok(());
             }
             Ok(Event::Crash { ts_ns, ctx, crash }) => Item::Crash { ts_ns, ctx, crash },
-            Ok(Event::CtxClose { .. } | Event::CtxTime { .. }) => return Ok(()),
+            Ok(Event::CtxClose { .. } | Event::CtxTime { .. } | Event::Resync) => return Ok(()),
             Err(e) => {
                 let _ = writeln!(self.out, "rtlog: {e}");
                 return Ok(());

@@ -116,6 +116,17 @@ pub(crate) fn export(items: &[Item<'_>], names: &HashMap<u32, String>, clock_hz:
                 ev.push(json!({"ph": "i", "s": "t", "pid": 1, "tid": ctx, "ts": ts, "cat": "crash", "name": name}));
                 ev.push(json!({"ph": "i", "s": "g", "pid": 1, "tid": ctx, "ts": ts, "cat": "crash", "name": name}));
             }
+            Item::Gap {
+                ts_ns,
+                offset,
+                skipped,
+                ..
+            } => {
+                ev.push(json!({
+                    "ph": "i", "s": "g", "pid": 1, "tid": 0, "ts": us(*ts_ns, t0), "cat": "rtlog",
+                    "name": format!("stream gap: {skipped} bytes skipped at byte {offset}"),
+                }));
+            }
             Item::Dropped { ts_ns, ctx, count } => {
                 drops_total += u64::from(*count);
                 let ts = us(*ts_ns, t0);

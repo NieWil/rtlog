@@ -29,11 +29,20 @@ pub(crate) struct Shared {
     pub(crate) name: Mutex<String>,
     /// Bumped on rename so the drain re-announces the context.
     name_gen: AtomicU32,
+    /// When the thread ended, in order of ending (0 while it lives); set before
+    /// the ring is closed. Decides which finished rings are evicted first.
+    closed_seq: AtomicU64,
 }
 
 pub(crate) struct Entry {
     pub(crate) shared: Arc<Shared>,
     announced_gen: u32,
+    /// Clock of the last frame forwarded from this ring, in ticks: the running
+    /// sum of the timestamp deltas, which equals the producer's `last_ts` at
+    /// that frame. Written out in a `ctx_time` frame at each resync.
+    ticks: u64,
+    /// A resync was written and this context's `ctx_time` has not followed yet.
+    sync_pending: bool,
 }
 
 pub(crate) static PENDING: Mutex<Vec<Entry>> = Mutex::new(Vec::new());
@@ -42,13 +51,32 @@ pub(crate) static REGISTRY: Mutex<Vec<Entry>> = Mutex::new(Vec::new());
 /// a `try_lock` from a signal handler almost always succeeds; `REGISTRY`, by
 /// contrast, is held for a whole drain pass, transport writes included.
 pub(crate) static RINGS: Mutex<Vec<Arc<Shared>>> = Mutex::new(Vec::new());
-/// Set by the first drain pass. Before it, exited threads' rings are kept only
-/// up to [`KEEP_WITHOUT_DRAIN`], so a program that never installs a drain does
+/// Drains alive right now (created and not dropped). While there is none,
+/// nothing retires the rings of exited threads, so [`KEEP_WITHOUT_DRAIN`] bounds
+/// them: a program that never installs a drain, or whose drain is gone, does
 /// not keep one 64 KiB ring per thread it ever ran.
-static DRAIN_SEEN: AtomicBool = AtomicBool::new(false);
-/// How many exited threads' rings are kept while no drain has run: enough for
-/// a crash dump to show the last finished workers, bounded at 1 MiB.
+static ACTIVE_DRAINS: AtomicUsize = AtomicUsize::new(0);
+static CLOSE_SEQ: AtomicU64 = AtomicU64::new(0);
+/// How many exited threads' rings are kept while no drain is alive: the most
+/// recently finished ones, enough for a crash dump to show the last workers,
+/// bounded at 1 MiB.
 pub const KEEP_WITHOUT_DRAIN: usize = 16;
+
+/// Counts a live [`Drain`] in `ACTIVE_DRAINS`.
+struct ActiveDrain;
+
+impl ActiveDrain {
+    fn new() -> Self {
+        ACTIVE_DRAINS.fetch_add(1, Ordering::AcqRel);
+        ActiveDrain
+    }
+}
+
+impl Drop for ActiveDrain {
+    fn drop(&mut self) {
+        ACTIVE_DRAINS.fetch_sub(1, Ordering::AcqRel);
+    }
+}
 static NEXT_CTX: AtomicU32 = AtomicU32::new(1);
 static LIVE_CONTEXTS: AtomicUsize = AtomicUsize::new(0);
 static DROPS: AtomicU64 = AtomicU64::new(0);
@@ -71,35 +99,61 @@ impl Drop for Local {
         // Detach the fast path first: a log call from a later TLS destructor
         // takes the slow path and is dropped instead of touching a released ring.
         let _ = FAST.try_with(|f| f.set(core::ptr::null()));
+        self.shared.closed_seq.store(
+            CLOSE_SEQ.fetch_add(1, Ordering::AcqRel) + 1,
+            Ordering::Release,
+        );
         self.shared.ring.close();
-        if !DRAIN_SEEN.load(Ordering::Acquire) {
-            // No drain so far: nothing retires rings, so keep only the last
-            // `KEEP_WITHOUT_DRAIN` closed ones (a crash dump still shows the
-            // threads that just finished) and release the oldest. Frames in a
-            // released ring are lost, as they would be at exit. A drain that
-            // starts in between finds the entries in `REGISTRY` and retires
-            // them itself.
-            let mut pending = lock(&PENDING);
-            let closed = pending.iter().filter(|e| e.shared.ring.is_closed()).count();
-            if closed > KEEP_WITHOUT_DRAIN {
-                let mut released = Vec::new();
-                let mut excess = closed - KEEP_WITHOUT_DRAIN;
-                pending.retain(|e| {
-                    if excess > 0 && e.shared.ring.is_closed() {
-                        excess -= 1;
-                        released.push(e.shared.clone());
-                        return false;
-                    }
-                    true
-                });
-                drop(pending);
-                let mut rings = lock(&RINGS);
-                for r in &released {
-                    rings.retain(|s| !Arc::ptr_eq(s, r));
-                    LIVE_CONTEXTS.fetch_sub(1, Ordering::Relaxed);
-                }
-            }
+        if ACTIVE_DRAINS.load(Ordering::Acquire) == 0 {
+            evict_closed();
         }
+    }
+}
+
+/// With no drain alive, keep the [`KEEP_WITHOUT_DRAIN`] most recently finished
+/// rings (for a crash dump) and release every older finished one. Frames in a
+/// released ring are lost, as they would be at exit.
+///
+/// A drain that starts meanwhile finds the surviving entries and retires them
+/// itself. An entry is removed from its list under that list's lock, so exactly
+/// one party (this function or the drain) releases it and counts it out.
+fn evict_closed() {
+    let mut pending = lock(&PENDING);
+    // A running drain pass holds REGISTRY across transport writes: never wait
+    // for it from a dying thread; skip its entries this time.
+    let mut registry = REGISTRY.try_lock().ok();
+    let mut closed: Vec<u64> = pending
+        .iter()
+        .chain(registry.iter().flat_map(|r| r.iter()))
+        .filter(|e| e.shared.ring.is_closed())
+        .map(|e| e.shared.closed_seq.load(Ordering::Acquire))
+        .collect();
+    if closed.len() <= KEEP_WITHOUT_DRAIN {
+        return;
+    }
+    closed.sort_unstable_by(|a, b| b.cmp(a));
+    let cutoff = closed[KEEP_WITHOUT_DRAIN - 1]; // keep everything at or after it
+    let mut released: Vec<Arc<Shared>> = Vec::new();
+    let mut evict = |list: &mut Vec<Entry>| {
+        list.retain(|e| {
+            let old =
+                e.shared.ring.is_closed() && e.shared.closed_seq.load(Ordering::Acquire) < cutoff;
+            if old {
+                released.push(e.shared.clone());
+            }
+            !old
+        })
+    };
+    evict(&mut pending);
+    if let Some(r) = registry.as_mut() {
+        evict(r);
+    }
+    drop(registry);
+    drop(pending);
+    let mut rings = lock(&RINGS);
+    for r in &released {
+        rings.retain(|s| !Arc::ptr_eq(s, r));
+        LIVE_CONTEXTS.fetch_sub(1, Ordering::Relaxed);
     }
 }
 
@@ -121,6 +175,7 @@ fn new_local() -> Local {
         ring: Ring::new(),
         name: Mutex::new(name),
         name_gen: AtomicU32::new(1),
+        closed_seq: AtomicU64::new(0),
     });
     shared.ring.mark_split(ctx);
     LIVE_CONTEXTS.fetch_add(1, Ordering::Relaxed);
@@ -128,6 +183,8 @@ fn new_local() -> Local {
     lock(&PENDING).push(Entry {
         shared: shared.clone(),
         announced_gen: 0,
+        ticks: 0,
+        sync_pending: false,
     });
     Local {
         shared,
@@ -205,7 +262,7 @@ impl SpanGuard {
         _not_send: core::marker::PhantomData,
     };
 
-    /// Span ID (0 when the span was filtered out); high 16 bits are the context.
+    /// Span ID (0 when the span was filtered out); high 32 bits are the context.
     pub fn id(&self) -> u64 {
         self.id
     }
@@ -257,6 +314,15 @@ pub fn __span_enter(site: u32) -> SpanGuard {
         .unwrap_or(SpanGuard::INERT)
 }
 
+/// Names of the contexts whose rings are alive or kept (tests).
+#[doc(hidden)]
+pub fn __context_names() -> Vec<String> {
+    lock(&RINGS)
+        .iter()
+        .map(|s| s.name.lock().unwrap_or_else(|e| e.into_inner()).clone())
+        .collect()
+}
+
 /// Runtime counters (spec section 0, `stats()`). Lock-free to read.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Stats {
@@ -285,6 +351,9 @@ pub struct Drain<T: Transport> {
     transport: T,
     header_sent: bool,
     scratch: std::boxed::Box<[u8; FRAME_MAX]>,
+    /// Frame bytes written since the last resync (or the header).
+    since_sync: usize,
+    _active: ActiveDrain,
 }
 
 impl<T: Transport> Drain<T> {
@@ -294,6 +363,8 @@ impl<T: Transport> Drain<T> {
             transport,
             header_sent: false,
             scratch: std::boxed::Box::new([0; FRAME_MAX]),
+            since_sync: 0,
+            _active: ActiveDrain::new(),
         }
     }
 
@@ -306,13 +377,27 @@ impl<T: Transport> Drain<T> {
         // Holding REGISTRY makes this the only consumer for the pass; producers
         // never take it, so the transport may log while we hold it.
         let mut reg = lock(&REGISTRY);
-        DRAIN_SEEN.store(true, Ordering::Release);
         {
             let mut pending = lock(&PENDING);
             reg.append(&mut pending);
         }
         let mut frames = 0;
         let mut full = false;
+        // A resync every RESYNC_EVERY bytes lets a decoder that lost sync pick
+        // the stream up again. Names are announced again, and each context's
+        // exact clock follows, so a gap costs only the frames inside it.
+        if self.since_sync >= wire::RESYNC_EVERY {
+            if drain::write_resync(&mut self.transport).is_ok() {
+                self.since_sync = 0;
+                for e in reg.iter_mut() {
+                    e.announced_gen = 0;
+                    e.sync_pending = true;
+                }
+            } else {
+                full = true;
+            }
+        }
+        let since_sync = &mut self.since_sync;
         let t = &mut self.transport;
         let scratch = &mut self.scratch;
         reg.retain_mut(|e| {
@@ -321,6 +406,13 @@ impl<T: Transport> Drain<T> {
             }
             let ring = &e.shared.ring;
             let ctx = ring.ctx();
+            if e.sync_pending {
+                if drain::write_ctx_time(t, ctx, e.ticks).is_err() {
+                    full = true;
+                    return true;
+                }
+                e.sync_pending = false;
+            }
             let gen = e.shared.name_gen.load(Ordering::Acquire);
             if e.announced_gen != gen {
                 let name = e
@@ -348,6 +440,8 @@ impl<T: Transport> Drain<T> {
                     return true;
                 }
                 unsafe { ring.commit_raw(n) };
+                e.ticks = e.ticks.saturating_add(drain::frame_delta(&scratch[..n]));
+                *since_sync += n;
                 frames += 1;
                 FRAMES.fetch_add(1, Ordering::Relaxed);
                 BYTES.fetch_add(n as u64, Ordering::Relaxed);

@@ -10,9 +10,12 @@
 //! //   rtlog decode --contract app.contract.jsonl crashes/crash-4242-1.rtlog
 //! ```
 //!
-//! Each dump is a new file, numbered per process, so a caught panic or a
-//! watchdog [`snapshot`] never overwrites an earlier dump, and a restart after
-//! a crash (new pid) never overwrites the crash.
+//! Each dump is a new file, opened with `O_EXCL`, so nothing is ever
+//! overwritten: not by a caught panic or a watchdog [`snapshot`] in the same
+//! process, not by a restart (even when containers reuse pid 1: the number then
+//! just counts on), and not by a forked child (its pid differs). Fatal dumps
+//! are always written; panics and snapshots stop after [`MAX_SOFT_DUMPS`] per
+//! process, so a service that catches a panic per request cannot fill the disk.
 //!
 //! What it covers: panics (including integer division by zero in Rust),
 //! `SIGSEGV`, `SIGBUS`, `SIGFPE`, `SIGILL` and `SIGABRT` (so `abort()` and
@@ -34,7 +37,7 @@ use std::io;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Mutex, MutexGuard, OnceLock, TryLockError};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, TryLockError};
 
 use crate::ring::FRAME_MAX;
 use crate::runtime::{Shared, FAST, REGISTRY, RINGS};
@@ -53,17 +56,28 @@ pub const SIGNALS: [i32; 5] = [
 /// Crash kind for [`snapshot`]: a dump requested by the program, not a crash.
 pub const CRASH_SNAPSHOT: u8 = 3;
 
-/// `<dir>/crash-<pid>-`, so a dump only appends its number and `.rtlog`.
+/// Panics and snapshots written per process before further ones are skipped.
+/// Fatal signals ignore the cap.
+pub const MAX_SOFT_DUMPS: u32 = 16;
+
+/// `<dir>/crash-`; a dump appends `<pid>-<n>.rtlog`, with the pid read when
+/// the dump is written (it differs in a forked child).
 static PREFIX: OnceLock<CString> = OnceLock::new();
 static HEADER: OnceLock<[u8; HEADER_LEN]> = OnceLock::new();
+/// Next number to try in a dump's name.
+static NEXT: AtomicU32 = AtomicU32::new(1);
 /// Dumps written so far by this process.
-static SEQ: AtomicU32 = AtomicU32::new(0);
-/// Set by the first fatal dump: later signals (an abort after a panic, a fault
-/// inside the handler) do not dump again.
+static WRITTEN: AtomicU32 = AtomicU32::new(0);
+/// Panic and snapshot dumps started (for [`MAX_SOFT_DUMPS`]).
+static SOFT: AtomicU32 = AtomicU32::new(0);
+/// Set by the first fatal dump: a second fatal signal (another thread, or a
+/// fault inside the handler) does not dump again, it waits for this one.
 static FATAL: AtomicBool = AtomicBool::new(false);
+/// Set when the fatal dump is finished.
+static DUMP_DONE: AtomicBool = AtomicBool::new(false);
 
 /// Install the crash handler. Dumps go to `dir` (created if missing) as
-/// `crash-<pid>-<n>.rtlog`, `n` counting from 1 per process.
+/// `crash-<pid>-<n>.rtlog`; `n` counts up from 1 and skips names that exist.
 ///
 /// Call it early in `main`, once. It also fixes the clock rate now, so the
 /// handler never calibrates it.
@@ -74,7 +88,7 @@ pub fn install(dir: impl AsRef<Path>) -> io::Result<()> {
     if !prefix.ends_with(b"/") {
         prefix.push(b'/');
     }
-    prefix.extend_from_slice(format!("crash-{}-", std::process::id()).as_bytes());
+    prefix.extend_from_slice(b"crash-");
     if prefix.len() > PREFIX_MAX {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -104,7 +118,11 @@ pub fn install(dir: impl AsRef<Path>) -> io::Result<()> {
         unsafe {
             let mut sa: libc::sigaction = core::mem::zeroed();
             sa.sa_sigaction = on_signal as *const () as usize;
-            sa.sa_flags = libc::SA_SIGINFO | libc::SA_ONSTACK | libc::SA_RESETHAND;
+            // No SA_RESETHAND: it restores the default action the moment the first
+            // handler starts, so a second thread faulting during the dump would be
+            // killed on the spot and cut the dump short. The handler resets the
+            // default itself, after the dump.
+            sa.sa_flags = libc::SA_SIGINFO | libc::SA_ONSTACK;
             libc::sigemptyset(&mut sa.sa_mask);
             if libc::sigaction(sig, &sa, core::ptr::null_mut()) != 0 {
                 return Err(io::Error::last_os_error());
@@ -120,10 +138,9 @@ pub fn snapshot(reason: &str) {
     dump(CRASH_SNAPSHOT, 0, 0, 0, 0, reason, false);
 }
 
-/// Number of dumps this process has written; the last file is
-/// `<dir>/crash-<pid>-<dumps()>.rtlog`.
+/// Number of dumps this process has written.
 pub fn dumps() -> u32 {
-    SEQ.load(Ordering::Acquire)
+    WRITTEN.load(Ordering::Acquire)
 }
 
 extern "C" fn on_signal(sig: i32, info: *mut libc::siginfo_t, uctx: *mut libc::c_void) {
@@ -144,10 +161,17 @@ extern "C" fn on_signal(sig: i32, info: *mut libc::siginfo_t, uctx: *mut libc::c
         signal_name(sig),
         true,
     );
-    // SA_RESETHAND restored the default action: re-raise to get it (core dump,
-    // exit status that names the signal).
-    // SAFETY: raising a signal is async-signal-safe.
-    unsafe { libc::raise(sig) };
+    // Restore the default action and re-raise to get it (core dump, exit status
+    // that names the signal). The signal is blocked while this handler runs, so
+    // it stays pending and takes effect when the handler returns.
+    // SAFETY: sigaction(2) and raise(3) are async-signal-safe.
+    unsafe {
+        let mut dfl: libc::sigaction = core::mem::zeroed();
+        dfl.sa_sigaction = libc::SIG_DFL;
+        libc::sigemptyset(&mut dfl.sa_mask);
+        libc::sigaction(sig, &dfl, core::ptr::null_mut());
+        libc::raise(sig);
+    }
 }
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -216,16 +240,16 @@ fn try_lock_for<T>(m: &'static Mutex<T>, attempts: u32) -> Option<MutexGuard<'st
     None
 }
 
-/// Longest `<dir>/crash-<pid>-` accepted by [`install`]. The dump path is built
-/// on the stack of a signal handler, which may be a small alternate stack.
+/// Longest `<dir>/crash-` accepted by [`install`]. The dump path is built on
+/// the stack of a signal handler, which may be a small alternate stack.
 const PREFIX_MAX: usize = 200;
-const PATH_BUF: usize = PREFIX_MAX + 10 + 6 + 1;
+/// Prefix, `<pid>-<n>` (two u32s), ".rtlog", NUL.
+const PATH_BUF: usize = PREFIX_MAX + 10 + 1 + 10 + 6 + 1;
 
-/// `<prefix><seq>.rtlog\0` into `buf`, without allocating or formatting.
-fn dump_path(buf: &mut [u8; PATH_BUF], prefix: &[u8], seq: u32) -> Option<usize> {
+/// Append `v` in decimal at `buf[i..]`; returns the new length.
+fn put_dec(buf: &mut [u8], mut i: usize, mut v: u32) -> usize {
     let mut digits = [0u8; 10];
     let mut n = 0;
-    let mut v = seq;
     loop {
         digits[n] = b'0' + (v % 10) as u8;
         n += 1;
@@ -234,22 +258,70 @@ fn dump_path(buf: &mut [u8; PATH_BUF], prefix: &[u8], seq: u32) -> Option<usize>
             break;
         }
     }
-    let suffix = b".rtlog";
-    let total = prefix.len() + n + suffix.len() + 1;
-    if total > buf.len() {
-        return None;
-    }
-    buf[..prefix.len()].copy_from_slice(prefix);
-    let mut i = prefix.len();
     while n > 0 {
         n -= 1;
         buf[i] = digits[n];
         i += 1;
     }
+    i
+}
+
+/// `<prefix><pid>-<n>.rtlog\0` into `buf`, without allocating or formatting.
+fn dump_path(buf: &mut [u8; PATH_BUF], prefix: &[u8], pid: u32, n: u32) -> usize {
+    buf[..prefix.len()].copy_from_slice(prefix);
+    let mut i = put_dec(buf, prefix.len(), pid);
+    buf[i] = b'-';
+    i = put_dec(buf, i + 1, n);
+    let suffix = b".rtlog";
     buf[i..i + suffix.len()].copy_from_slice(suffix);
     i += suffix.len();
     buf[i] = 0;
-    Some(i + 1)
+    i + 1
+}
+
+/// Create the next dump file: `O_EXCL`, so an existing file (an earlier run
+/// that shared this pid, as in containers) is never touched; the number moves
+/// on instead. Returns the descriptor.
+fn open_dump(prefix: &[u8]) -> Option<i32> {
+    // SAFETY: getpid(2) is async-signal-safe.
+    let pid = unsafe { libc::getpid() } as u32;
+    let mut path = [0u8; PATH_BUF];
+    for _ in 0..1_000 {
+        let n = NEXT.fetch_add(1, Ordering::AcqRel);
+        dump_path(&mut path, prefix, pid, n);
+        // SAFETY: open(2) is async-signal-safe; `path` is NUL-terminated.
+        let fd = unsafe {
+            libc::open(
+                path.as_ptr().cast(),
+                libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_CLOEXEC,
+                0o644 as libc::c_uint,
+            )
+        };
+        if fd >= 0 {
+            return Some(fd);
+        }
+        if io::Error::last_os_error().raw_os_error() != Some(libc::EEXIST) {
+            return None;
+        }
+    }
+    None
+}
+
+/// Block (without sleeping in a lock) until the fatal dump in progress is done
+/// or about two seconds pass: a second crashing thread must not race the first
+/// one to the default action, which ends the process mid-write.
+fn wait_for_dump() {
+    let ts = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 1_000_000,
+    };
+    for _ in 0..2_000 {
+        if DUMP_DONE.load(Ordering::Acquire) {
+            return;
+        }
+        // SAFETY: nanosleep(2) is async-signal-safe.
+        unsafe { libc::nanosleep(&ts, core::ptr::null_mut()) };
+    }
 }
 
 /// A control frame: id, ctx varint, payload.
@@ -270,9 +342,12 @@ fn dump_ring(fd: i32, shared: &Shared, scratch: &mut [u8; FRAME_MAX]) {
     let mut name = [0u8; 1 + 64];
     let n = match shared.name.try_lock() {
         Ok(s) => {
-            let b = &s.as_bytes()[..s.len().min(64)];
-            name[1..=b.len()].copy_from_slice(b);
-            b.len()
+            let mut k = s.len().min(64);
+            while !s.is_char_boundary(k) {
+                k -= 1;
+            }
+            name[1..=k].copy_from_slice(&s.as_bytes()[..k]);
+            k
         }
         Err(_) => 0,
     };
@@ -285,7 +360,8 @@ fn dump_ring(fd: i32, shared: &Shared, scratch: &mut [u8; FRAME_MAX]) {
     // The first unread frame's absolute time: the newest timestamp minus the
     // deltas of every unread frame.
     let mut deltas: u64 = 0;
-    // SAFETY: the registry lock is held, so the drain cannot consume meanwhile.
+    // SAFETY: `scan` only reads; if the drain consumes meanwhile it notices
+    // (it re-checks `tail`) and stops rather than hand out overwritten bytes.
     unsafe {
         ring.scan(scratch, |f| {
             if let Some((d, _)) = f.get(4..).and_then(varint::decode) {
@@ -308,31 +384,25 @@ fn dump_ring(fd: i32, shared: &Shared, scratch: &mut [u8; FRAME_MAX]) {
 fn dump(kind: u8, sig: i32, code: i32, addr: u64, pc: u64, msg: &str, fatal: bool) {
     if fatal {
         if FATAL.swap(true, Ordering::AcqRel) {
+            // Another thread (or this one, inside its own handler) is already
+            // dumping: let it finish before the default action ends the process.
+            wait_for_dump();
             return;
         }
         crate::level::set_off(); // freeze: later log calls are no-ops
-    } else if FATAL.load(Ordering::Acquire) {
+    } else if FATAL.load(Ordering::Acquire) || SOFT.fetch_add(1, Ordering::AcqRel) >= MAX_SOFT_DUMPS
+    {
         return;
     }
     let (Some(prefix), Some(header)) = (PREFIX.get(), HEADER.get()) else {
         return;
     };
-    let seq = SEQ.fetch_add(1, Ordering::AcqRel) + 1;
-    let mut path = [0u8; PATH_BUF];
-    if dump_path(&mut path, prefix.as_bytes(), seq).is_none() {
+    let Some(fd) = open_dump(prefix.as_bytes()) else {
+        if fatal {
+            DUMP_DONE.store(true, Ordering::Release);
+        }
         return;
-    }
-    // SAFETY: open(2) is async-signal-safe; `path` is NUL-terminated.
-    let fd = unsafe {
-        libc::open(
-            path.as_ptr().cast(),
-            libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC | libc::O_CLOEXEC,
-            0o644 as libc::c_uint,
-        )
     };
-    if fd < 0 {
-        return;
-    }
     write_all(fd, header);
 
     let mut scratch = [0u8; FRAME_MAX];
@@ -341,10 +411,24 @@ fn dump(kind: u8, sig: i32, code: i32, addr: u64, pc: u64, msg: &str, fatal: boo
     // have frozen the producers, so a frame can then only be duplicated, not
     // torn; `scan` stops at a frame the drain released meanwhile.
     let _drain_out = try_lock_for(&REGISTRY, 1_000);
-    // The ring list is never held for long, so this practically always succeeds.
+    // The ring list is held only for a push or a removal, so this practically
+    // always succeeds.
     if let Some(rings) = try_lock_for(&RINGS, 10_000) {
-        for shared in rings.iter() {
-            dump_ring(fd, shared, &mut scratch);
+        if fatal {
+            // In a signal handler: no allocation. Hold the list while writing;
+            // the process is ending anyway.
+            for shared in rings.iter() {
+                dump_ring(fd, shared, &mut scratch);
+            }
+        } else {
+            // Ordinary thread context (panic hook, snapshot): copy the handles
+            // out and release the list, so a slow disk never stalls a thread
+            // that is starting, exiting or being retired.
+            let owned: Vec<Arc<Shared>> = rings.iter().cloned().collect();
+            drop(rings);
+            for shared in &owned {
+                dump_ring(fd, shared, &mut scratch);
+            }
         }
     }
 
@@ -385,4 +469,8 @@ fn dump(kind: u8, sig: i32, code: i32, addr: u64, pc: u64, msg: &str, fatal: boo
     write_all(fd, &b[..n]);
     // SAFETY: close(2) is async-signal-safe.
     unsafe { libc::close(fd) };
+    WRITTEN.fetch_add(1, Ordering::AcqRel);
+    if fatal {
+        DUMP_DONE.store(true, Ordering::Release);
+    }
 }

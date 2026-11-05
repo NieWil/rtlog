@@ -110,7 +110,8 @@ def check_realtime():
 
 def check_wire():
     wire = (CORE / "wire.rs").read_text()
-    rust = {m.group(1): int(m.group(2)) for m in re.finditer(r"pub const CTRL_(\w+): u32 = CONTROL_BASE \+ (\d+);", wire)}
+    # `CONTROL_BASE` alone is offset 0 (the resync frame).
+    rust = {m.group(1): int(m.group(2) or 0) for m in re.finditer(r"pub const CTRL_(\w+): u32 = CONTROL_BASE(?: \+ (\d+))?;", wire)}
     if "CTRL_RESYNC" not in wire or not rust:
         fail("wire", "could not read control frame IDs from wire.rs")
     header = (ROOT / "c" / "include" / "rtlog.h").read_text()
@@ -122,7 +123,7 @@ def check_wire():
             fail("wire", f"control frame {name}: Rust +{rust[name]}, C +{val}")
     stream = (ROOT / "crates" / "rtlog-decode" / "src" / "stream.rs").read_text()
     for name in rust:
-        if name != "RESYNC" and f"wire::CTRL_{name}" not in stream:
+        if f"wire::CTRL_{name}" not in stream:
             fail("wire", f"decoder does not handle control frame CTRL_{name}")
     arg = (CORE / "arg.rs").read_text()
     tags = {m.group(1): int(m.group(2)) for m in re.finditer(r"^\s+(\w+) = (\d+),", arg.split("pub enum Tag")[1].split("}")[0], re.M)}
