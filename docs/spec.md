@@ -401,7 +401,7 @@ Baselines in the same report: `write!` of the same text into a `String`, and a t
 - Size on Cortex-M4F (`thumbv7em-none-eabihf`, `opt-level = "s"`, LTO, `size/mcu`): fixed runtime code ≤ 2560 bytes, and ≤ 64 bytes of code per additional call site. Deterministic; gated.
 - RAM: the rings the application declares plus a fixed per-ring state; nothing grows at runtime.
 
-Budgets are stated in CPU cycles, because a call's cost is a cycle count and its time is cycles ÷ clock: 50 cycles is 15 ns at 3.3 GHz but 500 ns at 100 MHz. Nanoseconds are quoted only for a named clock. The Cortex-M cycle budget (≤ 150 per W1 call) is a placeholder until measured on hardware (roadmap).
+Budgets are stated in CPU cycles, because a call's cost is a cycle count and its time is cycles ÷ clock: 50 cycles is 15 ns at 3.3 GHz but 500 ns at 100 MHz. Nanoseconds are quoted only for a named clock. The Cortex-M cycle budget (≤ 150 per W1 call) is still a placeholder. The first hardware measurement (an STM32L432KC at 80 MHz, the C/Zephyr path, [report](stm32-comparison.md)) is 447 median cycles for one `u32` and 520 for three, about three times over it; those cases include the timing wrapper and are not the W1 shape (two arguments). The budget stays until that path is optimised and a W1-shaped case is measured.
 
 **Current figures** are in [Performance and size](performance.md), republished by CI on every run.
 

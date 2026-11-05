@@ -82,7 +82,8 @@ Host-side outputs beyond text, JSON lines and Perfetto: syslog / journald, OpenT
 
 ## 10c. Benchmarks
 
-- A cycle-count test on a Cortex-M4 board in CI through `probe-rs`, with a budget set from the first hardware measurement (the spec's ≤ 150 cycles is a placeholder until then).
+- A cycle-count test on a Cortex-M4 board in CI through `probe-rs`. A first manual measurement exists ([STM32L432KC at 80 MHz](stm32-comparison.md): 447 median cycles for one `u32` through the C/Zephyr path, about three times the spec's ≤ 150-cycle placeholder); the budget stays until the path is optimised.
+- Optimise the C and bare-metal log path: it costs hundreds of cycles on a Cortex-M4 where the Rust host path costs 36–46 on x86-64 and arm64. Measure a W1-shaped case (two arguments) and the Rust `no_std` path on the same board.
 - Comparisons against defmt, delog, NanoLog, spdlog, `tracing` and `env_logger` on the same machines, with one harness per workload (W1–W7; W6 `isr` and W7 `control loop` are not written yet).
 - A report script collecting results into one table per release, with the commit hash and board revision.
 

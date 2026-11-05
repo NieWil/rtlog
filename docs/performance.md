@@ -90,6 +90,8 @@ let cycles = unsafe { core::ptr::read_volatile(0xE000_1004 as *const u32) }.wrap
 
 An automated on-board cycle test (probe-rs in CI) is on the roadmap. Until it lands, the Cortex-M budget in the spec is a placeholder.
 
+A first manual measurement exists: on an STM32L432KC at 80 MHz the C/Zephyr path takes 447 median cycles for one `u32` and 520 for three (neither figure subtracts the timing wrapper), far above the host figures above. The [STM32 comparison](stm32-comparison.md) has the method, all runs, the comparison with Zephyr's deferred logger (rtlog is faster in every case measured) and the matched flash and RAM sizes. It is a reason to optimise the bare-metal path, not to change the budget.
+
 ## Release binaries
 
 The [release workflow](../.github/workflows/release.yml) builds the `rtlog` CLI with the `dist` profile (fat LTO, one codegen unit, stripped) for these hosts:
