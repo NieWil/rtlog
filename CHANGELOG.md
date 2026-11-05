@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- Add a shared STM32 hardware stress comparison for rtlog and Zephyr deferred
+  logging: overload, paused consumers, dynamic payloads, timer interference,
+  and drop accounting/recovery checks. Record three runs per logger in the
+  [stress report](docs/stm32-stress.md).
+- Build the STM32L432KC benchmark with Zephyr 4.2 / SDK 0.17.2, add a deferred
+  Zephyr logger comparator and matched ten-site footprint builds, and record
+  measured static flash/RAM sizes and three hardware cycle runs per logger in the
+  [STM32 comparison report](docs/stm32-comparison.md).
+- Add a Zephyr Cortex-M cycle benchmark with serial CSV reporting, explicit
+  successful-write and full-ring checks, and NUCLEO-L432KC build/flash instructions
+  in [the Zephyr guide](docs/zephyr.md).
+
 ## v0.2.1 — hardening after the v0.2.0 review
 
 Fixes from the v0.2.0 review ([PR #9](https://github.com/NieWil/rtlog/pull/9)). **API change:** `rtlog::crash::install` and `rtlog_crash_install` take a directory, not a file, and write `crash-<pid>-<n>.rtlog` in it.

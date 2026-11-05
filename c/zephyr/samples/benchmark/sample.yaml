@@ -1,0 +1,14 @@
+sample:
+  name: rtlog Cortex-M cycle benchmark
+tests:
+  sample.rtlog.benchmark:
+    platform_allow:
+      - nucleo_l432kc
+    tags:
+      - rtlog
+      - benchmark
+    harness: console
+    harness_config:
+      type: one_line
+      regex:
+        - "RTLOG_BENCH_DONE"
