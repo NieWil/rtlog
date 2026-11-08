@@ -1,6 +1,6 @@
 [package]
 name = "rtlog-decode"
-description = "Host decoder for rtlog streams: contract + stream to text or JSON lines"
+description = "Host decoder and CLI for rtlog: turns binary log streams into text, JSON lines or Perfetto traces"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

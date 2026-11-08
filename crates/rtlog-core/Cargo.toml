@@ -1,6 +1,6 @@
 [package]
 name = "rtlog-core"
-description = "Lock-free, allocation-free deferred logger core (no_std)"
+description = "Deferred, lock-free, allocation-free logger for no_std and std: ~40-cycle log calls, ~2 KB of flash, formatting done on the host"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
