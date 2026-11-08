@@ -5,6 +5,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
+readme = "../../README.md"
+keywords = ["logging", "no-std", "embedded", "real-time", "lock-free"]
+categories = ["development-tools::debugging", "embedded", "no-std"]
 
 [lib]
 name = "rtlog"

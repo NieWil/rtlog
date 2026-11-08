@@ -472,7 +472,7 @@ impl<'a, const N: usize> Producer<'a, N> {
     }
 
     /// Append a frame whose arguments `encode` writes in place (used by the log
-    /// macros; see [`Ring::emit`]).
+    /// macros; see `Ring::emit`).
     #[inline(always)]
     pub fn emit<F: FnOnce(&mut Writer<'_>)>(&mut self, site: u32, encode: F) -> bool {
         // SAFETY: `Producer` is unique per ring and not `Sync`.

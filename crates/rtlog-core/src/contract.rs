@@ -57,7 +57,7 @@ pub fn to_jsonl() -> String {
     out
 }
 
-/// Error from [`write`].
+/// Error from `write`.
 #[derive(Debug)]
 pub enum ContractError {
     /// Two sites hash to the same ID.
