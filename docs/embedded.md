@@ -1,6 +1,6 @@
 # Embedded Rust (`no_std`)
 
-`rtlog-core` builds without `std` for Cortex-M3/M4/M7/M33 and RV32IMAC; CI checks all four. On bare metal, each task owns a static ring and logs through its producer. The drain runs from the idle loop or a DMA callback.
+`rtlog` builds without `std` for Cortex-M3/M4/M7/M33 and RV32IMAC; CI checks all four. On bare metal, each task owns a static ring and logs through its producer. The drain runs from the idle loop or a DMA callback.
 
 ```rust
 static MOTOR: rtlog::Ring<1024> = rtlog::Ring::new();

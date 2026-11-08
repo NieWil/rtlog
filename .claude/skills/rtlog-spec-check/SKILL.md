@@ -52,7 +52,7 @@ Go through each list for the parts the change touches.
 **Memory (spec §0, §7)**
 
 - No growth at runtime: rings are sized at creation. On `no_std`, nothing may need `alloc`.
-- `cargo build -p rtlog-core --no-default-features --target thumbv7em-none-eabihf` must still build.
+- `cargo build -p rtlog --no-default-features --target thumbv7em-none-eabihf` must still build.
 
 **Wire compatibility (spec §5)**
 

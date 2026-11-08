@@ -10,7 +10,7 @@ name: release
 #   from the selected branch, creates that tag and publishes the release.
 # - Pushing a `v*` tag yourself: publishes the release for that tag.
 #
-# A published release also publishes rtlog-core and rtlog-decode to crates.io
+# A published release also publishes rtlog and rtlog-decode to crates.io
 # (needs the CARGO_REGISTRY_TOKEN repository secret). Every run, dry runs
 # included, packages and verifies both crates first.
 on:
@@ -204,13 +204,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Publish rtlog-core, then rtlog-decode
+      - name: Publish rtlog, then rtlog-decode
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
           [ -n "$CARGO_REGISTRY_TOKEN" ] || { echo "::error::Add a crates.io API token as the CARGO_REGISTRY_TOKEN repository secret"; exit 1; }
           version=${RELEASE_VERSION#v}
-          for crate in rtlog-core rtlog-decode; do
+          for crate in rtlog rtlog-decode; do
             # Re-running the job skips what an earlier attempt already uploaded.
             code=$(curl -s -o /dev/null -w '%{http_code}' -A 'rtlog-release (github.com/NieWil/rtlog)' \
               "https://crates.io/api/v1/crates/$crate/$version")

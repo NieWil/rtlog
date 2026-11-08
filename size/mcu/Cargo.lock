@@ -73,8 +73,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "rtlog-core"
-version = "0.1.0"
+name = "rtlog"
+version = "0.2.2"
 dependencies = [
  "libc",
  "linkme",
@@ -86,7 +86,7 @@ version = "0.0.0"
 dependencies = [
  "cortex-m-rt",
  "panic-halt",
- "rtlog-core",
+ "rtlog",
 ]
 
 [[package]]

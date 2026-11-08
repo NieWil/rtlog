@@ -292,7 +292,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
-name = "rtlog-core"
+name = "rtlog"
 version = "0.2.2"
 dependencies = [
  "criterion",
@@ -307,7 +307,7 @@ dependencies = [
  "criterion",
  "libc",
  "object",
- "rtlog-core",
+ "rtlog",
  "serde",
  "serde_json",
 ]
@@ -316,7 +316,7 @@ dependencies = [
 name = "rtlog-examples"
 version = "0.2.2"
 dependencies = [
- "rtlog-core",
+ "rtlog",
  "rtlog-decode",
 ]
 

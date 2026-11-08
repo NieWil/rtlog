@@ -17,7 +17,7 @@ A developer writes `rtlog::info!("pid out={} err={}", out, err)` and reads the l
 - Disabled sites compile to nothing: `RTLOG_LEVEL=off` at build time removes every call path.
 - Dropping is the only overload behaviour: a slow transport can lose frames but can never slow the producer.
 
-**Public API** (crate `rtlog-core`, prefix `rtlog`)
+**Public API** (crate `rtlog`, prefix `rtlog`)
 
 ```rust
 // Call sites: same shape as println!, every arg implements Log

@@ -6,7 +6,7 @@ license.workspace = true
 publish = false
 
 [dependencies]
-rtlog-core = { path = "../crates/rtlog-core" }
+rtlog = { path = "../crates/rtlog" }
 rtlog-decode = { path = "../crates/rtlog-decode" }
 
 [[example]]

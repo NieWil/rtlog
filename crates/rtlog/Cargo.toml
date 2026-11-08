@@ -1,5 +1,5 @@
 [package]
-name = "rtlog-core"
+name = "rtlog"
 description = "Deferred, lock-free, allocation-free logger for no_std and std: ~40-cycle log calls, ~2 KB of flash, formatting done on the host"
 version.workspace = true
 edition.workspace = true
@@ -9,9 +9,6 @@ homepage.workspace = true
 readme = "../../README.md"
 keywords = ["logging", "no-std", "embedded", "real-time", "lock-free"]
 categories = ["development-tools::debugging", "embedded", "no-std"]
-
-[lib]
-name = "rtlog"
 
 [features]
 default = ["std"]
