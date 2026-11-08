@@ -3,9 +3,19 @@
 //! Separate test binary: no other test here may start a drain.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Mutex, MutexGuard};
+
+/// The tests share the process-wide ring list and level switches, so they
+/// run one at a time: a test running alongside another could evict the
+/// other's rings or switch its logging off.
+fn serial() -> MutexGuard<'static, ()> {
+    static LOCK: Mutex<()> = Mutex::new(());
+    LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 #[test]
 fn rings_of_exited_threads_are_released_without_a_drain() {
+    let _serial = serial();
     static CALLS: AtomicUsize = AtomicUsize::new(0);
     let before = rtlog::stats().contexts;
     for round in 0..50u32 {
@@ -33,6 +43,7 @@ fn rings_of_exited_threads_are_released_without_a_drain() {
 
 #[test]
 fn spans_follow_their_own_switch_not_the_level() {
+    let _serial = serial();
     static RING: rtlog::Ring<1024> = rtlog::Ring::new();
     let (mut p, mut c) = RING.split(7).unwrap();
     let mut out = [0u8; rtlog::FRAME_MAX];
@@ -63,6 +74,7 @@ fn spans_follow_their_own_switch_not_the_level() {
 /// the one a crash dump most wants to show.
 #[test]
 fn the_last_finished_threads_are_the_ones_kept() {
+    let _serial = serial();
     use std::sync::mpsc;
     let (release_tx, release_rx) = mpsc::channel::<()>();
     let (started_tx, started_rx) = mpsc::channel::<()>();
