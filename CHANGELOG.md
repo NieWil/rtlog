@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Both crates can be published to crates.io: `rtlog-decode` pins `rtlog-core` by version, and both have a readme, keywords and categories. The release workflow publishes them after the GitHub release (with the `CARGO_REGISTRY_TOKEN` secret) and checks the packages with `cargo publish --dry-run` on every run.
+- README: install with `cargo add rtlog-core` and `cargo install rtlog-decode`.
+
 ## v0.2.2 — review fixes, decoder resync, STM32/Zephyr benchmarks
 
 Fixes from an independent review of v0.2.1, and the decoder resync that was the top open item.
