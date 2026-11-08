@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/rtlog", "crates/rtlog-decode", "examples"]
 
 [workspace.package]
-version = "0.2.2"
+version = "0.2.3"
 edition = "2021"
 repository = "https://github.com/NieWil/rtlog"
 license = "MIT OR Apache-2.0"

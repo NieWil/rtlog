@@ -1,10 +1,13 @@
 # Changelog
 
-## Unreleased
+## v0.2.3 — on crates.io
+
+The first release published to crates.io: `cargo add rtlog` for the library, `cargo install rtlog-decode` for the CLI.
 
 - The core crate is renamed from `rtlog-core` to `rtlog`, the name it was already imported as (`use rtlog::…`); its folder is now `crates/rtlog`.
 - Both crates can be published to crates.io: `rtlog-decode` pins `rtlog` by version, and both have a readme, keywords and categories. The release workflow publishes them after the GitHub release (with the `CARGO_REGISTRY_TOKEN` secret) and checks the packages with `cargo publish --dry-run` on every run.
 - README: install with `cargo add rtlog` and `cargo install rtlog-decode`.
+- Tests: the `no_drain` tests run one at a time; run in parallel they shared the global ring list and failed now and then on macOS.
 
 ## v0.2.2 — review fixes, decoder resync, STM32/Zephyr benchmarks
 
