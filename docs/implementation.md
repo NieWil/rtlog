@@ -6,7 +6,7 @@ This file tracks how the code in `crates/` matches [the specification](spec.md):
 
 | Spec section | Status | Where |
 | --- | --- | --- |
-| 0 API: `trace!` … `error!`, `set_level`, `stats`, `spawn_drain`, `poll` | Built | `rtlog-core` `lib.rs`, `runtime.rs` |
+| 0 API: `trace!` … `error!`, `set_level`, `stats`, `spawn_drain`, `poll` | Built | `rtlog` `lib.rs`, `runtime.rs` |
 | 4 Site IDs, link-section descriptors, contract file | Built (see deviations 1–2) | `site.rs`, `contract.rs` |
 | 5 Stream header `RTL1`, log frames, `dropped` / `ctx_register` / `ctx_close` | Built | `wire.rs`, `drain.rs` |
 | 6 Argument model, tiers 1 and 3 | Built (see deviations 3–4) | `arg.rs` |

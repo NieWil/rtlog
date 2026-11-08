@@ -17,7 +17,7 @@ A developer writes `rtlog::info!("pid out={} err={}", out, err)` and reads the l
 - Disabled sites compile to nothing: `RTLOG_LEVEL=off` at build time removes every call path.
 - Dropping is the only overload behaviour: a slow transport can lose frames but can never slow the producer.
 
-**Public API** (crate `rtlog-core`, prefix `rtlog`)
+**Public API** (crate `rtlog`, prefix `rtlog`)
 
 ```rust
 // Call sites: same shape as println!, every arg implements Log
@@ -205,7 +205,7 @@ Arguments are written fixed-width so every site has a compile-time maximum frame
 | `..09` | ctx\_time | ctx, u64 absolute ticks: sets the context's clock, so a crash dump that holds only the tail of a ring still decodes to absolute times |
 
 - Span IDs: high 32 bits = context ID, low 32 bits = per-context counter, so IDs are unique with no atomics and stay unique however many threads a process creates. The frame's `ctx` says which thread executed it.
-- Resync: a corrupted byte costs the frames up to the next resync frame, not the rest of the capture (section 9). The Rust `std` drain and the C `rtlog_drain` write them; on `no_std` call `drain::write_resync` yourself about every 64 KiB (`PassStats.bytes` counts them) and `write_ctx_time` per context if exact times after a gap matter.
+- Resync: a corrupted byte loses only the frames up to the next resync frame (section 9); decoding continues after it. The Rust `std` drain and the C `rtlog_drain` write them; on `no_std` call `drain::write_resync` yourself about every 64 KiB (`PassStats.bytes` counts them) and `write_ctx_time` per context if exact times after a gap matter.
 
 ## 6. Argument model
 

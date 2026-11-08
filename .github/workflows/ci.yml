@@ -61,7 +61,7 @@ jobs:
         with:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build -p rtlog-core --no-default-features --target ${{ matrix.target }} --release
+      - run: cargo build -p rtlog --no-default-features --target ${{ matrix.target }} --release
 
   cross:
     name: tests on ${{ matrix.target }} (QEMU)
@@ -262,7 +262,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Criterion (short run)
         run: |
-          cargo bench -p rtlog-core --bench log_call -- --warm-up-time 1 --measurement-time 3
+          cargo bench -p rtlog --bench log_call -- --warm-up-time 1 --measurement-time 3
           cargo bench -p rtlog-decode --bench decode -- --warm-up-time 1 --measurement-time 3
       - name: Benchmark summary
         run: python3 scripts/bench_report.py target/criterion | tee bench.md >> "$GITHUB_STEP_SUMMARY"
@@ -282,7 +282,7 @@ jobs:
         with:
           components: miri, rust-src
       - run: cargo miri setup
-      - run: "cargo miri test -p rtlog-core --lib -- ring:: varint:: arg:: hash:: drain:: wire:: level::"
+      - run: "cargo miri test -p rtlog --lib -- ring:: varint:: arg:: hash:: drain:: wire:: level::"
 
   sanitizers:
     name: sanitizer (${{ matrix.sanitizer }})
@@ -305,7 +305,7 @@ jobs:
           key: ${{ matrix.sanitizer }}
       - run: >
           cargo test -Zbuild-std --target x86_64-unknown-linux-gnu
-          -p rtlog-core -p rtlog-decode --lib --tests
+          -p rtlog -p rtlog-decode --lib --tests
 
   soak:
     name: soak (2 min)

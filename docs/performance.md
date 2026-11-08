@@ -47,7 +47,7 @@ A log call costs 6–8× less than formatting the same line, and meets the spec'
 
 ```sh
 cargo run --release -p rtlog-examples --example timing -- --out timing.md
-cargo bench -p rtlog-core --bench log_call          # Criterion, per workload
+cargo bench -p rtlog --bench log_call          # Criterion, per workload
 RUSTFLAGS="-C target-cpu=native" cargo run --release -p rtlog-examples --example timing
 ```
 

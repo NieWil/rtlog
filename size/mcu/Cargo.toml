@@ -12,14 +12,14 @@ publish = false
 [features]
 # Exactly one of these is enabled per build (see scripts/size_report.sh).
 baseline = []
-rtlog1 = ["dep:rtlog-core"]
-rtlog10 = ["dep:rtlog-core"]
+rtlog1 = ["dep:rtlog"]
+rtlog10 = ["dep:rtlog"]
 fmt10 = []
 
 [dependencies]
 cortex-m-rt = "0.7"
 panic-halt = "1"
-rtlog-core = { path = "../../crates/rtlog-core", default-features = false, optional = true }
+rtlog = { path = "../../crates/rtlog", default-features = false, optional = true }
 
 [profile.release]
 opt-level = "s"

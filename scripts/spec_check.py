@@ -30,7 +30,7 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SPEC = ROOT / "docs" / "spec.md"
-CORE = ROOT / "crates" / "rtlog-core" / "src"
+CORE = ROOT / "crates" / "rtlog" / "src"
 
 # Functions on the log path: (file, function names). Everything a log call
 # executes when the level is enabled and the ring has room.
