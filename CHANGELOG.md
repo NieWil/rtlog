@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Release: crates.io publishing uses Trusted Publishing; the `CARGO_REGISTRY_TOKEN` secret is no longer needed.
+
 ## v0.2.3 — on crates.io
 
 The first release published to crates.io: `cargo add rtlog` for the library, `cargo install rtlog-decode` for the CLI.

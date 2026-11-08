@@ -7,6 +7,12 @@ The workflow checks that the version is well formed, matches `Cargo.toml` and is
 
 Pushing a `vX.Y.Z` tag yourself does the same. Running the workflow with an empty version is a dry run: it builds and packages, and publishes nothing.
 
-## crates.io token (once)
+## crates.io access (once per crate)
 
-Create a token at <https://crates.io/settings/tokens> with the `publish-new` and `publish-update` scopes, limited to the `rtlog` and `rtlog-decode` crates once they exist. Add it in **Settings → Secrets and variables → Actions** as `CARGO_REGISTRY_TOKEN`. Every run, dry runs included, packages and verifies both crates with `cargo publish --workspace --dry-run`, so manifest errors are caught on the pull request.
+The release publishes with [Trusted Publishing](https://crates.io/docs/trusted-publishing): no token is stored. The `crates-io` job gets an identity token from GitHub, and `rust-lang/crates-io-auth-action` exchanges it for a crates.io token that expires after about 30 minutes. crates.io only hands one out if the run comes from the repository and workflow named in the crate's settings.
+
+For each crate (`rtlog`, `rtlog-decode`), open its page on crates.io, then **Settings → Trusted Publishing → Add**, and enter owner `NieWil`, repository `rtlog`, workflow `release.yml`. Leave the environment empty.
+
+A new crate added to the workspace must be published once by hand with an API token (`cargo login`, then `cargo publish -p <crate>`), because Trusted Publishing can only be set up for a crate that already exists.
+
+Every run, dry runs included, packages and verifies both crates with `cargo publish --workspace --dry-run`, so manifest errors are caught on the pull request.

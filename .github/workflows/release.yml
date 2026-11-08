@@ -11,7 +11,8 @@ name: release
 # - Pushing a `v*` tag yourself: publishes the release for that tag.
 #
 # A published release also publishes rtlog and rtlog-decode to crates.io
-# (needs the CARGO_REGISTRY_TOKEN repository secret). Every run, dry runs
+# with Trusted Publishing: no stored token, crates.io checks that the run
+# comes from this repository's release.yml (docs/releasing.md). Every run, dry runs
 # included, packages and verifies both crates first.
 on:
   push:
@@ -201,14 +202,19 @@ jobs:
     if: github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && inputs.version != '')
     needs: publish
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # GitHub's identity token, exchanged for a crates.io token
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: Get a short-lived crates.io token (Trusted Publishing)
+        uses: rust-lang/crates-io-auth-action@v1
+        id: auth
       - name: Publish rtlog, then rtlog-decode
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
         run: |
-          [ -n "$CARGO_REGISTRY_TOKEN" ] || { echo "::error::Add a crates.io API token as the CARGO_REGISTRY_TOKEN repository secret"; exit 1; }
           version=${RELEASE_VERSION#v}
           for crate in rtlog rtlog-decode; do
             # Re-running the job skips what an earlier attempt already uploaded.
