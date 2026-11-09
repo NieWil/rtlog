@@ -183,6 +183,23 @@ fn json_line(
     )
 }
 
+/// A site section must hold whole descriptors. A remainder means the binary
+/// lays descriptors out differently (another rtlog version) or the section is
+/// damaged; reading on would silently drop sites from the contract.
+fn whole_descriptors(bytes: &[u8], size: usize, section: &str) -> Result<(), ElfError> {
+    if bytes.len() % size == 0 {
+        return Ok(());
+    }
+    Err(ElfError::BadEntry {
+        index: bytes.len() / size,
+        reason: format!(
+            "{section} is {} bytes, not a whole number of {size}-byte descriptors \
+             (built with a different rtlog version?)",
+            bytes.len()
+        ),
+    })
+}
+
 /// Read every site descriptor in an ELF image and return the contract as
 /// JSON lines (sorted by ID), ready for [`crate::Contract::from_jsonl`].
 pub fn contract_from_elf(data: &[u8]) -> Result<String, ElfError> {
@@ -195,6 +212,7 @@ pub fn contract_from_elf(data: &[u8]) -> Result<String, ElfError> {
         let bytes = sec.data().map_err(|e| ElfError::Parse(e.to_string()))?;
         let (w, base) = (img.ptr, sec.address());
         let size = 16 + 6 * w;
+        whole_descriptors(bytes, size, "linkme_SITES")?;
         for (i, e) in bytes.chunks_exact(size).enumerate() {
             let at = |o: usize| base + (i * size + o) as u64;
             let u32_at = |o: usize| u32::from_le_bytes(e[o..o + 4].try_into().unwrap());
@@ -234,6 +252,7 @@ pub fn contract_from_elf(data: &[u8]) -> Result<String, ElfError> {
         let bytes = sec.data().map_err(|e| ElfError::Parse(e.to_string()))?;
         let (w, base) = (img.ptr, sec.address());
         let size = 16 + 3 * w;
+        whole_descriptors(bytes, size, "rtlog_sites")?;
         for (i, e) in bytes.chunks_exact(size).enumerate() {
             let at = |o: usize| base + (i * size + o) as u64;
             let bad = |r: &str| ElfError::BadEntry {
@@ -601,6 +620,44 @@ mod tests {
                 matches!(contract_from_elf(&data), Err(ElfError::Parse(_))),
                 "{name}"
             );
+        }
+    }
+
+    /// A site section that does not hold whole descriptors is an error, not a
+    /// contract with the partial descriptor silently left out.
+    #[test]
+    fn partial_rust_descriptor_is_an_error() {
+        // One 64-byte descriptor plus 6 stray bytes.
+        let mut sites = rust_site(8, 2, [APP, MAIN_RS, FMT]);
+        sites.extend([0u8; 6]);
+        match contract_from_elf(&rust_image(true, EM_X86_64, sites)) {
+            Err(ElfError::BadEntry { index, reason }) => {
+                assert_eq!(index, 1);
+                assert!(
+                    reason.contains(
+                        "linkme_SITES is 70 bytes, not a whole number of 64-byte descriptors"
+                    ),
+                    "{reason}"
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+        // Shorter than one descriptor: not an empty contract.
+        assert!(matches!(
+            contract_from_elf(&rust_image(true, EM_X86_64, vec![0; 10])),
+            Err(ElfError::BadEntry { index: 0, .. })
+        ));
+    }
+
+    #[test]
+    fn partial_c_descriptor_is_an_error() {
+        let mut sites = c_site(b"RTLS", 3, 0, [FMT.0, MAIN_RS.0, APP.0]);
+        sites.truncate(sites.len() - 1);
+        match contract_from_elf(&c_image(sites)) {
+            Err(ElfError::BadEntry { index: 0, reason }) => {
+                assert!(reason.contains("rtlog_sites is 39 bytes"), "{reason}")
+            }
+            other => panic!("{other:?}"),
         }
     }
 
