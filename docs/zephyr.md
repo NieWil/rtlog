@@ -6,15 +6,29 @@ rtlog ships as a Zephyr module: the C header, a glue file with the clock and a d
 
 ## Add the module
 
-In your `west.yml`:
+Fetch rtlog in one of two ways.
+
+**With west.** Add it to the `projects` list of your workspace's `west.yml`, pinned to a release tag, then run `west update`:
 
 ```yaml
 manifest:
   projects:
     - name: rtlog
       url: https://github.com/NieWil/rtlog
-      revision: main
+      revision: v0.2.3
+      path: modules/lib/rtlog
 ```
+
+West then finds the module by itself. The sources are in `modules/lib/rtlog` inside the workspace.
+
+**As a separate checkout.** Clone rtlog anywhere and pass its absolute path to every build:
+
+```sh
+export RTLOG_DIR=/absolute/path/to/rtlog
+west build ... -- -DZEPHYR_EXTRA_MODULES="$RTLOG_DIR"
+```
+
+The commands below set `RTLOG_DIR` to wherever the rtlog sources are. With west, that is `~/zephyrproject/modules/lib/rtlog`, and you leave out `-DZEPHYR_EXTRA_MODULES`.
 
 In `prj.conf`:
 
@@ -52,9 +66,14 @@ int rtlog_zephyr_write(const uint8_t *bytes, size_t len) {
 
 ## Decode
 
+This builds the [hello sample](../c/zephyr/samples/hello), which is at `$RTLOG_DIR/c/zephyr/samples/hello`. Put the serial port in raw mode before the capture: a tty in its default mode translates CR/LF bytes and corrupts the binary frames. Use the baud rate your board's console runs at.
+
 ```sh
-west build -b <board> c/zephyr/samples/hello
+cd ~/zephyrproject
+west build -b <board> "$RTLOG_DIR/c/zephyr/samples/hello" -- -DZEPHYR_EXTRA_MODULES="$RTLOG_DIR"
+# if west fetched rtlog: west build -b <board> modules/lib/rtlog/c/zephyr/samples/hello
 rtlog contract --elf build/zephyr/zephyr.elf -o app.contract.jsonl
+stty -F /dev/ttyACM0 115200 raw -echo -ixon -ixoff -crtscts
 cat /dev/ttyACM0 > app.rtlog          # or your RTT / probe tool's capture
 rtlog decode --contract app.contract.jsonl app.rtlog
 rtlog decode --contract app.contract.jsonl --perfetto -o app.json app.rtlog
@@ -104,8 +123,11 @@ cd zephyr
 west sdk install --toolchains arm-zephyr-eabi
 ```
 
-With that environment active, build from your Zephyr workspace, adding the rtlog
-checkout as an extra module. Change `RTLOG_DIR` to your checkout's absolute path:
+With that environment active, build from your Zephyr workspace. The commands
+below use a separate rtlog checkout, added as an extra module; change
+`RTLOG_DIR` to its absolute path. If west fetched rtlog (see
+[Add the module](#add-the-module)), set `RTLOG_DIR` to
+`~/zephyrproject/modules/lib/rtlog` and leave out `-DZEPHYR_EXTRA_MODULES`:
 
 ```sh
 export RTLOG_DIR=/absolute/path/to/rtlog

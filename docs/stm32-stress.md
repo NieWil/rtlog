@@ -107,12 +107,14 @@ stack use or dynamic high-water mark was measured.
 
 ## Reproduce
 
-With the previously installed tools and USB permissions:
+With the tools from [Zephyr](zephyr.md#build-and-flash) installed and USB
+access set up as in the [comparison report](stm32-comparison.md#wsl-access-and-capture).
+Change `RTLOG_DIR` to your rtlog checkout's absolute path:
 
 ```sh
-. ~/.venvs/rtlog-zephyr/bin/activate
+. ~/.venvs/zephyr/bin/activate
 cd ~/zephyrproject
-export RTLOG_DIR=/home/niels/ui-mockup-task/rtlog
+export RTLOG_DIR=/absolute/path/to/rtlog
 export APP="$RTLOG_DIR/c/zephyr/samples/benchmark"
 west build -d build/stress-rtlog -b nucleo_l432kc "$APP" -- \
   -DZEPHYR_EXTRA_MODULES="$RTLOG_DIR" -DRTLOG_BENCH_STRESS=ON

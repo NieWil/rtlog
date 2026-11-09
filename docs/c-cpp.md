@@ -31,7 +31,7 @@ void handle(int id, const std::string &route) {
 }
 ```
 
-Placeholders are `{}`, one per argument, and the host-side specs (`{:x}`, `{:.3}`, `{:b}`) work as in Rust. In C++ a wrong placeholder count fails to compile.
+Placeholders are `{}`, one per argument, and the host-side specs (`{:x}`, `{:.3}`, `{:b}`) work as in Rust. In C++ a wrong placeholder count fails to compile. C has no such check: the call compiles and logs, and `rtlog contract --elf` then rejects the binary with `site 0x…: 2 placeholders but 1 args`.
 
 ## Build, capture, decode
 
@@ -57,10 +57,13 @@ rtlog decode --contract demo.contract.jsonl --perfetto -o demo.json demo.rtlog
 | `rtlog_set_thread_name(name)` | Name the calling thread's track |
 | `rtlog_thread_exit()` | Release the thread's ring slot early; on POSIX it is released by itself when the thread exits |
 | `rtlog_set_clock(now, hz)` | Use your own clock (DWT, RTOS tick); POSIX defaults to `CLOCK_MONOTONIC` |
-| `rtlog_set_level(level)` | Runtime level filter |
+| `rtlog_set_level(level)` | Runtime level filter: `RTLOG_LEVEL_TRACE`, `RTLOG_LEVEL_DEBUG`, `RTLOG_LEVEL_INFO`, `RTLOG_LEVEL_WARN`, `RTLOG_LEVEL_ERROR` or `RTLOG_LEVEL_OFF`; records below `level` are skipped |
 | `rtlog_set_spans(on)` | Record spans or not, independently of the level |
 | `rtlog_dropped()` | Frames dropped so far |
-| `rtlog_crash_install(dir)` / `rtlog_crash_snapshot(reason)` | Crash log (POSIX): dumps to `<dir>/crash-<pid>-<n>.rtlog`; see [When the process crashes](crash.md) |
+| `rtlog_crash_install(dir)` / `rtlog_crash_snapshot(reason)` | Crash log: dumps to `<dir>/crash-<pid>-<n>.rtlog`; see [When the process crashes](crash.md) |
+| `rtlog_crash_dumps()` | Crash dumps this process has written so far |
+
+The crash log is POSIX only: the header defines these three functions only when `__unix__` or `__linux__` is defined, so on Zephyr or bare metal a call to them fails to link.
 
 Supported argument types: `bool`, `char`, all integer types, `float`, `double`, `const char *` (and `std::string` in C++). Strings are capped at 127 bytes.
 

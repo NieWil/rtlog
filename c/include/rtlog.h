@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT OR Apache-2.0 */
 /*
- * rtlog.h: header-only C / C++ producer for the rtlog wire format (v0.1).
+ * rtlog.h: header-only C / C++ producer for the rtlog wire format.
  *
  * A log call writes a site ID, a timestamp delta, a context ID and raw typed
  * argument bytes into the calling thread's own lock-free ring: no formatting,
@@ -34,7 +34,7 @@
 #error "rtlog.h needs GCC or Clang (section attributes and __atomic builtins)"
 #endif
 #if defined(__APPLE__) || defined(_WIN32)
-#error "rtlog.h v0.1 supports ELF targets only (Linux, Zephyr, bare metal)"
+#error "rtlog.h supports ELF targets only (Linux, Zephyr, bare metal)"
 #endif
 #if __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__
 #error "rtlog.h supports little-endian targets only"
