@@ -249,6 +249,22 @@ pub fn dumps() -> u32 {
     WRITTEN.load(Ordering::Acquire)
 }
 
+/// In a coverage build (`cargo llvm-cov` sets `cfg(coverage)`), save this
+/// process's coverage counters now: a process killed by a signal never
+/// reaches the exit hook that normally writes them, so the crash tests' code
+/// would count as never run. Not async-signal-safe, which is acceptable in a
+/// coverage build only; normal builds compile this to nothing.
+fn write_coverage_profile() {
+    #[cfg(coverage)]
+    {
+        extern "C" {
+            fn __llvm_profile_write_file() -> core::ffi::c_int;
+        }
+        // SAFETY: provided by the profiler runtime that coverage builds link.
+        unsafe { __llvm_profile_write_file() };
+    }
+}
+
 /// Arguments of the fatal signal dump, passed to [`signal_dump`] through a pointer.
 struct SignalDump {
     sig: i32,
@@ -374,6 +390,7 @@ extern "C" fn on_signal(sig: i32, info: *mut libc::siginfo_t, uctx: *mut libc::c
         // SAFETY: only the thread that claimed the fatal dump gets here, so the
         // dump stack has one user; `args` outlives the call.
         unsafe { on_dump_stack(signal_dump, (&mut args as *mut SignalDump).cast()) };
+        write_coverage_profile();
     }
     // Restore the default action and re-raise to get it (core dump, exit status
     // that names the signal). The signal is blocked while this handler runs, so

@@ -27,3 +27,7 @@ criterion = { version = "0.5", default-features = false, features = ["cargo_benc
 [[bench]]
 name = "log_call"
 harness = false
+
+[lints.rust]
+# `cargo llvm-cov` sets cfg(coverage); see crash::write_coverage_profile.
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(coverage)"] }
