@@ -21,9 +21,18 @@ use object::{Object, ObjectSection, RelocationFlags, RelocationTarget};
 /// Why a contract could not be extracted.
 #[derive(Debug, PartialEq, Eq)]
 pub enum ElfError {
+    /// The file is not a readable little-endian ELF image, or a site section
+    /// could not be read; holds the reason.
     Parse(String),
+    /// The image has neither a `linkme_SITES` nor an `rtlog_sites` section.
     NoSites,
-    BadEntry { index: usize, reason: String },
+    /// A site descriptor could not be decoded.
+    BadEntry {
+        /// 0-based index of the descriptor in its section.
+        index: usize,
+        /// What was wrong with it, such as `bad level` or `truncated`.
+        reason: String,
+    },
 }
 
 impl fmt::Display for ElfError {

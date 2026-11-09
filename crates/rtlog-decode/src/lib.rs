@@ -13,6 +13,8 @@
 //! assert!(out.text.contains("INFO  motor speed=1200 rpm"));
 //! ```
 
+#![warn(missing_docs)]
+
 pub mod contract;
 pub mod elf;
 mod perfetto;
@@ -42,6 +44,7 @@ pub enum Output {
 /// Decoding options.
 #[derive(Clone, Copy, Debug)]
 pub struct Options {
+    /// Output format; defaults to [`Output::Text`].
     pub output: Output,
     /// Decode even if the stream's contract hash does not match.
     pub force: bool,
@@ -116,9 +119,13 @@ pub struct Decoded {
     /// Rendered output. Text lines show seconds since the first event; JSON and
     /// Perfetto keep absolute nanoseconds and microseconds since the first event.
     pub text: String,
+    /// Log records decoded.
     pub records: usize,
+    /// Spans opened (`span_open` frames decoded).
     pub spans: usize,
+    /// Sum of the counts in all `dropped` frames.
     pub dropped: u64,
+    /// Contexts that announced a name (distinct `ctx_register` IDs).
     pub contexts: usize,
     /// Set when decoding stopped early (a bad frame with no resync frame after
     /// it); the output holds what came before.

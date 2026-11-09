@@ -20,7 +20,9 @@ use crate::{Contract, Item, TextRenderer};
 /// Where the text goes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Target {
+    /// Standard output.
     Stdout,
+    /// Standard error.
     Stderr,
 }
 
@@ -108,6 +110,7 @@ impl<W: Write> rtlog::Transport for TextTransport<W> {
 /// Settings for [`init_with`].
 #[derive(Clone, Copy, Debug)]
 pub struct Config {
+    /// Where the text goes; defaults to [`Target::Stdout`].
     pub target: Target,
     /// Lowest level shown; `None` reads `RTLOG` (trace, debug, info, warn,
     /// error, off), defaulting to info.

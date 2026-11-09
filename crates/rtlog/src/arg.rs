@@ -18,17 +18,29 @@ pub const TRUNCATED: u8 = 0x80;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Tag {
+    /// `u8`, 1 byte.
     U8 = 1,
+    /// `u16`, 2 bytes little-endian.
     U16 = 2,
+    /// `u32`, 4 bytes little-endian.
     U32 = 3,
+    /// `u64`, 8 bytes little-endian.
     U64 = 4,
+    /// `i8`, 1 byte.
     I8 = 5,
+    /// `i16`, 2 bytes little-endian.
     I16 = 6,
+    /// `i32`, 4 bytes little-endian.
     I32 = 7,
+    /// `i64`, 8 bytes little-endian.
     I64 = 8,
+    /// `f32`, 4 bytes little-endian (IEEE 754 bits).
     F32 = 9,
+    /// `f64`, 8 bytes little-endian (IEEE 754 bits).
     F64 = 10,
+    /// `bool`, 1 byte: 0 or 1.
     Bool = 11,
+    /// `char`, its scalar value as 4 bytes little-endian.
     Char = 12,
     /// `u8` length (bit 7 = truncated) + UTF-8 bytes.
     Str = 13,

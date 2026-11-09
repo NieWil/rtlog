@@ -27,15 +27,24 @@ pub enum SiteKind {
 #[derive(Debug)]
 #[repr(C)]
 pub struct Site {
+    /// Site ID written in every frame from this site; see [`site_id`].
     pub id: u32,
+    /// Log call or span.
     pub kind: SiteKind,
+    /// Level of a log call; always [`Level::Info`] for a span.
     pub level: Level,
+    /// Number of arguments; always 0 for a span.
     pub nargs: u8,
     _reserved: u8,
+    /// Source line of the macro call, from `line!()`.
     pub line: u32,
+    /// Source column of the macro call, from `column!()`.
     pub column: u32,
+    /// Module path of the macro call, from `module_path!()`.
     pub module: &'static str,
+    /// Source file of the macro call, from `file!()`.
     pub file: &'static str,
+    /// Format string of a log call, or the name of a span.
     pub fmt: &'static str,
 }
 
@@ -120,6 +129,7 @@ pub const fn site_id(
     h
 }
 
+/// Link-time collection of every [`Site`] the macros emit; read it with [`sites`].
 #[linkme::distributed_slice]
 pub static SITES: [Site];
 

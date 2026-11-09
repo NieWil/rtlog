@@ -143,8 +143,11 @@ pub fn write_dropped(t: &mut impl Transport, ctx: u32, count: u32) -> Result<(),
 /// Counters from one drain pass.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PassStats {
+    /// Log and control frames moved from the ring to the transport.
     pub frames: usize,
+    /// Bytes of those frames; the `dropped` report is not counted.
     pub bytes: usize,
+    /// Drop count written in a `dropped` frame this pass (0 if none).
     pub dropped_reported: u32,
 }
 
