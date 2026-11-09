@@ -35,6 +35,8 @@ Placeholders are `{}`, one per argument, and the host-side specs (`{:x}`, `{:.3}
 
 ## Build, capture, decode
 
+With the `rtlog-dev` Debian/Ubuntu package from the [releases page](https://github.com/NieWil/rtlog/releases) (since 0.2.5), the header is in `/usr/include` and pkg-config gives the flags: `cc demo.c $(pkg-config --cflags --libs rtlog) -o demo`. From a checkout:
+
 ```sh
 cc  -O2 -std=gnu11 -pthread -I c/include c/examples/demo.c   -o demo
 c++ -O2 -std=c++17 -pthread -I c/include c/examples/demo.cpp -o demo_cpp

@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Debian/Ubuntu packages on each release:** `rtlog_<version>-1_<arch>.deb` (amd64, i386, arm64, armhf) installs the `rtlog` command and a man page; `rtlog-dev_<version>-1_all.deb` installs `rtlog.h` and a pkg-config file (`pkg-config --cflags --libs rtlog`). Built by `scripts/build_deb.sh` in the release workflow, which installs, runs and lints them (lintian) before publishing; they are covered by `SHA256SUMS`.
+
 ## v0.2.4 — crash dumps on every thread, quality gates, board results
 
 Crash dumps of debug builds are complete whichever thread crashes (x86-64 and aarch64); CI enforces coverage, dependency, spelling, workflow and C static checks; users can share timing results from their boards.
