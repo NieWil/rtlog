@@ -831,10 +831,32 @@ mod tests {
         .unwrap();
     }
 
+    /// The current stack pointer. Read from the register, not from a local's
+    /// address: AddressSanitizer moves escaping locals to a heap "fake stack".
+    #[inline(always)]
+    fn stack_pointer() -> usize {
+        let sp: usize;
+        #[cfg(target_arch = "x86_64")]
+        // SAFETY: reads rsp; no memory access.
+        unsafe {
+            core::arch::asm!("mov {}, rsp", out(reg) sp, options(nomem, nostack, preserves_flags))
+        };
+        #[cfg(target_arch = "aarch64")]
+        // SAFETY: reads sp; no memory access.
+        unsafe {
+            core::arch::asm!("mov {}, sp", out(reg) sp, options(nomem, nostack, preserves_flags))
+        };
+        #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+        {
+            let local = 0u8;
+            sp = core::hint::black_box(&local) as *const u8 as usize;
+        }
+        sp
+    }
+
     extern "C" fn record_stack_address(arg: *mut libc::c_void) {
-        let local = 0u8;
         // SAFETY: the caller passes a pointer to a live usize.
-        unsafe { *(arg as *mut usize) = core::hint::black_box(&local) as *const u8 as usize };
+        unsafe { *(arg as *mut usize) = stack_pointer() };
     }
 
     #[test]
@@ -842,8 +864,7 @@ mod tests {
         // Nothing else in this test binary maps the dump stack (`install`
         // runs only in child processes).
         assert!(DUMP_STACK_TOP.load(Ordering::Acquire).is_null());
-        let marker = core::hint::black_box(0u8);
-        let here = core::hint::black_box(&marker) as *const u8 as usize;
+        let here = stack_pointer();
         let mut seen = 0usize;
         // SAFETY: one caller; `record_stack_address` does not unwind.
         unsafe { on_dump_stack(record_stack_address, (&mut seen as *mut usize).cast()) };
