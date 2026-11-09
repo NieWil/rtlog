@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## v0.2.5 — Debian/Ubuntu packages, C thread-name fix
+
+Each release now ships `.deb` packages for the CLI and the C header, and `rtlog_set_thread_name` no longer loses the name on a thread's first use.
 
 - **C: `rtlog_set_thread_name` on a thread's first use could lose the name.** The call first claimed the ring under the default `thread-<ctx>` name and made it live, then renamed it; a drain running in between announced the default name, and records logged before the next announcement were labelled `[thread-<ctx>]`. The first call now claims the ring under the given name. In a stress test (200 threads, a drain spinning in parallel), 143 of 4000 records were mislabelled before and 0 after. This was the `C / C++ (gcc)` CI failure on `main` (`missing in demo: [sensor] ...`).
 - **Debian/Ubuntu packages on each release:** `rtlog_<version>-1_<arch>.deb` (amd64, i386, arm64, armhf) installs the `rtlog` command and a man page; `rtlog-dev_<version>-1_all.deb` installs `rtlog.h` and a pkg-config file (`pkg-config --cflags --libs rtlog`). Built by `scripts/build_deb.sh` in the release workflow, which installs, runs and lints them (lintian) before publishing; they are covered by `SHA256SUMS`.
