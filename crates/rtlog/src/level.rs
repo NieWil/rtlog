@@ -151,6 +151,23 @@ mod tests {
     }
 
     #[test]
+    fn filter_values_map_back_to_levels() {
+        // `level()` reads the filter byte back through `from_u8`; the runtime
+        // switch itself is tested in `tests/cov_level.rs` (it is process-wide).
+        for l in [
+            Level::Trace,
+            Level::Debug,
+            Level::Info,
+            Level::Warn,
+            Level::Error,
+        ] {
+            assert_eq!(Level::from_u8(l as u8), Some(l));
+        }
+        assert_eq!(Level::from_u8(OFF), None);
+        assert_eq!(Level::from_u8(u8::MAX), None);
+    }
+
+    #[test]
     fn const_eq() {
         assert!(eq("info", "info"));
         assert!(!eq("info", "inf"));

@@ -589,6 +589,81 @@ mod tests {
         );
     }
 
+    const SITE: &str = r#"{"id":7,"level":"info","module":"m","file":"f.rs","line":1,"column":1,"fmt":"x={}","nargs":1}"#;
+
+    /// Header, a frame for unknown site 99, a resync frame, then `x=5` from site 7.
+    fn stream_with_unknown_site(c: &Contract) -> Vec<u8> {
+        let header = rtlog::wire::Header::new(c.hash(), 1_000_000_000).encode();
+        let mut b = header.to_vec();
+        b.extend(99u32.to_le_bytes());
+        b.extend(rtlog::wire::CTRL_RESYNC.to_le_bytes());
+        b.extend(header);
+        b.extend(7u32.to_le_bytes());
+        b.extend([10, 0, rtlog::arg::Tag::U8 as u8, 5]); // delta 10 ticks, ctx 0, u8 5
+        b
+    }
+
+    #[test]
+    fn unknown_site_before_a_resync_frame_is_a_gap() {
+        let c = Contract::from_jsonl(SITE).unwrap();
+        let bytes = stream_with_unknown_site(&c);
+        let d = decode(&c, &bytes, Output::Text, false).unwrap();
+        assert_eq!((d.gaps, d.skipped_bytes, d.records), (1, 4, 1));
+        assert_eq!(d.error, None);
+        let lines: Vec<&str> = d.text.lines().collect();
+        assert!(
+            lines[0].ends_with(
+                "[stream] GAP   bad data at byte 17 (unknown site 0x00000063); 4 bytes skipped, resumed at the next resync frame"
+            ),
+            "{}",
+            lines[0]
+        );
+        assert!(lines[1].ends_with("[ctx0] INFO  x=5"), "{}", lines[1]);
+    }
+
+    #[test]
+    fn colour_wraps_each_field_in_ansi_codes() {
+        let c = Contract::from_jsonl(SITE).unwrap();
+        let bytes = stream_with_unknown_site(&c);
+        let opts = Options {
+            color: true,
+            ..Options::default()
+        };
+        let text = decode_with(&c, &bytes, &opts).unwrap().text;
+        let record = text.lines().nth(1).unwrap();
+        assert_eq!(
+            record,
+            format!("{DIM}0.000000{RESET} {CYAN}[ctx0]{RESET} \x1b[32mINFO {RESET} x=5")
+        );
+        assert!(text.contains(&format!("{RED_BOLD}GAP  {RESET}")), "{text}");
+    }
+
+    #[test]
+    fn span_lines_are_hidden_when_spans_are_off() {
+        let mut r = TextRenderer::new(false, false, false, Some(0));
+        let open = Item::SpanOpen {
+            ts_ns: 0,
+            ctx: 1,
+            id: 5,
+            parent: 0,
+            name: "work",
+        };
+        let close = Item::SpanClose {
+            ts_ns: 2_000,
+            ctx: 1,
+            id: 5,
+        };
+        assert_eq!(r.render(&open), None);
+        assert_eq!(r.render(&close), None);
+        // Still tracked while hidden: nesting depth is back to 0, nothing left open.
+        assert_eq!(r.open.len(), 0);
+        assert_eq!(r.depth.get(&1), Some(&0));
+
+        let mut on = TextRenderer::new(false, true, false, Some(0));
+        assert!(on.render(&open).unwrap().ends_with("SPAN  ▶ work"));
+        assert!(on.render(&close).unwrap().ends_with("SPAN  ◀ work 2000 ns"));
+    }
+
     #[test]
     fn human_durations() {
         assert_eq!(human_ns(950), "950 ns");

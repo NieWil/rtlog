@@ -112,4 +112,68 @@ mod tests {
         assert!(j.contains(r#""level":"warn""#));
         assert!(j.ends_with(r#""nargs":1}"#));
     }
+
+    #[test]
+    fn escapes_control_characters() {
+        let s = Site::new(Level::Info, "m", "f.rs", 1, 1, "a\rb\tc\u{1}d", 0);
+        let j = site_json(&s);
+        assert!(j.contains(r#""fmt":"a\rb\tc\u0001d""#), "{j}");
+    }
+
+    #[test]
+    fn span_sites_are_marked() {
+        let s = Site::span("m", "f.rs", 1, 1, "parse");
+        let j = site_json(&s);
+        assert!(j.ends_with(r#""nargs":0,"kind":"span"}"#), "{j}");
+    }
+
+    #[test]
+    fn to_jsonl_lists_every_site_sorted_by_id() {
+        let text = to_jsonl();
+        let ids: std::vec::Vec<u32> = text
+            .lines()
+            .map(|l| {
+                let rest = l.strip_prefix(r#"{"id":"#).unwrap();
+                rest[..rest.find(',').unwrap()].parse().unwrap()
+            })
+            .collect();
+        assert_eq!(ids.len(), site::sites().len());
+        assert!(ids.windows(2).all(|w| w[0] < w[1]), "{ids:?}");
+    }
+
+    #[test]
+    fn an_unwritable_path_is_an_io_error() {
+        let dir =
+            std::env::temp_dir().join(std::format!("rtlog-no-such-dir-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let err = write(dir.join("app.contract.jsonl")).unwrap_err();
+        let ContractError::Io(e) = &err else {
+            panic!("expected an I/O error, got {err:?}");
+        };
+        assert_eq!(e.kind(), std::io::ErrorKind::NotFound);
+        // Display shows the underlying error.
+        assert_eq!(std::format!("{err}"), std::format!("{e}"));
+    }
+
+    #[test]
+    fn write_creates_the_contract_file() {
+        let path =
+            std::env::temp_dir().join(std::format!("rtlog-contract-{}.jsonl", std::process::id()));
+        write(&path).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), to_jsonl());
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn a_collision_names_both_sites() {
+        let e = ContractError::Collision {
+            id: 0x1234,
+            a: "a.rs:1".into(),
+            b: "b.rs:2".into(),
+        };
+        assert_eq!(
+            std::format!("{e}"),
+            "site ID collision 0x00001234: a.rs:1 and b.rs:2"
+        );
+    }
 }

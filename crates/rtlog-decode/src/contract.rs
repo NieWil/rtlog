@@ -309,4 +309,117 @@ mod tests {
             .to_string()
             .contains("duplicate"));
     }
+
+    #[test]
+    fn every_error_has_a_message_naming_the_line_or_site() {
+        let cases = [
+            (
+                ContractError::Json {
+                    line: 3,
+                    msg: "EOF".into(),
+                },
+                "line 3: invalid JSON: EOF",
+            ),
+            (
+                ContractError::BadLevel {
+                    line: 2,
+                    level: "loud".into(),
+                },
+                "line 2: unknown level \"loud\"",
+            ),
+            (
+                ContractError::DuplicateId { id: 7 },
+                "duplicate site ID 0x00000007",
+            ),
+            (
+                ContractError::ReservedId { id: 0xffff_ff00 },
+                "site ID 0xffffff00 is in the control-frame range",
+            ),
+            (
+                ContractError::TooManyArgs { id: 7, nargs: 40 },
+                "site 0x00000007: 40 args > 32",
+            ),
+            (
+                ContractError::FmtTooLong { id: 7 },
+                "site 0x00000007: format string longer than 65535",
+            ),
+            (
+                ContractError::BadKind {
+                    line: 1,
+                    kind: "blob".into(),
+                },
+                "line 1: unknown kind \"blob\"",
+            ),
+            (
+                ContractError::PlaceholderMismatch {
+                    id: 7,
+                    placeholders: 1,
+                    nargs: 2,
+                },
+                "site 0x00000007: 1 placeholders but 2 args",
+            ),
+        ];
+        for (e, want) in cases {
+            assert_eq!(e.to_string(), want);
+        }
+    }
+
+    #[test]
+    fn missing_field_is_a_json_error_on_its_line() {
+        let no_fmt = LINE.replace(r#""fmt":"x={}","#, "");
+        let e = Contract::from_jsonl(&format!("{LINE}\n{no_fmt}")).unwrap_err();
+        match e {
+            ContractError::Json { line, msg } => {
+                assert_eq!(line, 2);
+                assert!(msg.contains("missing field `fmt`"), "{msg}");
+            }
+            e => panic!("{e:?}"),
+        }
+    }
+
+    #[test]
+    fn wrong_typed_field_is_a_json_error() {
+        let cases = [
+            (LINE.replace("\"line\":1", "\"line\":\"1\""), "invalid type"),
+            (LINE.replace("\"id\":7", "\"id\":-7"), "invalid value"),
+            (
+                LINE.replace("\"nargs\":1", "\"nargs\":300"),
+                "invalid value",
+            ),
+            (
+                LINE.replace("\"nargs\":1", "\"nargs\":1,\"kind\":5"),
+                "invalid type",
+            ),
+            ("[1,2,3]".to_owned(), "invalid type"),
+        ];
+        for (text, want) in cases {
+            match Contract::from_jsonl(&text) {
+                Err(ContractError::Json { line: 1, msg }) => {
+                    assert!(msg.contains(want), "{text}: {msg}")
+                }
+                r => panic!("{text}: {r:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn empty_contract_has_no_sites() {
+        let c = Contract::from_jsonl("\n  \n").unwrap();
+        assert!(c.is_empty());
+        assert_eq!(c.len(), 0);
+        assert_eq!(c.site(7), None);
+        assert_eq!(c.hash(), contract_hash_of([]));
+        assert!(!Contract::from_jsonl(LINE).unwrap().is_empty());
+    }
+
+    #[test]
+    fn explicit_kinds_are_read() {
+        let span = LINE.replace("\"nargs\":1", "\"nargs\":1,\"kind\":\"span\"");
+        let log = LINE
+            .replace("\"id\":7", "\"id\":8")
+            .replace("\"nargs\":1", "\"nargs\":1,\"kind\":\"log\"");
+        let c = Contract::from_jsonl(&format!("{span}\n{log}")).unwrap();
+        assert_eq!(c.site(7).unwrap().kind, Kind::Span);
+        assert_eq!(c.site(8).unwrap().kind, Kind::Log);
+    }
 }

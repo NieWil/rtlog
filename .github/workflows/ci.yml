@@ -197,8 +197,10 @@ jobs:
       - name: Run tests with coverage
         run: cargo llvm-cov --workspace --no-report
       - name: Coverage report (fails below the minimum)
-        # Minimum line coverage. Raise it when coverage goes up; lowering it
-        # needs a reason in the PR.
+        # Minimum line coverage (98.7 % at v0.2.4). Raise it when coverage goes
+        # up; lowering it needs a reason in the PR. What stays uncovered is
+        # platform code this x86-64 Linux job cannot run and syscall failures
+        # that need fault injection.
         run: |
           cargo llvm-cov report --lcov --output-path lcov.info
           {
@@ -208,7 +210,7 @@ jobs:
             cargo llvm-cov report --summary-only
             echo '```'
           } | tee -a "$GITHUB_STEP_SUMMARY"
-          cargo llvm-cov report --summary-only --fail-under-lines 85
+          cargo llvm-cov report --summary-only --fail-under-lines 97
       - name: Upload to Codecov
         if: always() && hashFiles('lcov.info') != ''
         uses: codecov/codecov-action@v5

@@ -526,3 +526,127 @@ impl<'c> Iterator for Decoder<'c, '_> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn contract() -> Contract {
+        Contract::from_jsonl(
+            r#"{"id":7,"level":"info","module":"m","file":"f.rs","line":1,"column":1,"fmt":"x={}","nargs":1}"#,
+        )
+        .unwrap()
+    }
+
+    fn header(c: &Contract) -> [u8; HEADER_LEN] {
+        Header::new(c.hash(), 1_000_000_000).encode()
+    }
+
+    fn register(ctx: u32, name: &str) -> Vec<u8> {
+        let mut f = wire::CTRL_CTX_REGISTER.to_le_bytes().to_vec();
+        let mut v = [0u8; 10];
+        let n = varint::encode(u64::from(ctx), &mut v);
+        f.extend_from_slice(&v[..n]);
+        f.push(name.len() as u8);
+        f.extend_from_slice(name.as_bytes());
+        f
+    }
+
+    #[test]
+    fn decode_errors_display() {
+        let cases = [
+            (
+                DecodeError::BadHeader,
+                "not an rtlog stream (bad or missing header)",
+            ),
+            (DecodeError::WireVersion(9), "unsupported wire version 9"),
+            (
+                DecodeError::ContractMismatch {
+                    stream: 1,
+                    contract: 0xabc,
+                },
+                "contract mismatch: stream 0x00000001, contract 0x00000abc (use --force to decode anyway)",
+            ),
+            (
+                DecodeError::UnknownSite { offset: 17, id: 5 },
+                "offset 17: unknown site 0x00000005",
+            ),
+            (
+                DecodeError::BadFrame {
+                    offset: 3,
+                    reason: "truncated name".into(),
+                },
+                "offset 3: bad frame: truncated name",
+            ),
+        ];
+        for (e, want) in cases {
+            assert_eq!(e.to_string(), want);
+        }
+    }
+
+    #[test]
+    fn session_remembers_context_names() {
+        let c = contract();
+        let mut s = Session::new(&c, &header(&c), false).unwrap();
+        assert_eq!(s.ctx_name(3), None);
+        assert_eq!(
+            s.decode_frame(&register(3, "motor")),
+            Ok(Event::CtxRegister {
+                ctx: 3,
+                name: "motor".into()
+            })
+        );
+        assert_eq!(s.ctx_name(3), Some("motor"));
+        assert_eq!(s.ctx_name(4), None);
+    }
+
+    #[test]
+    fn decode_frame_rejects_trailing_bytes() {
+        let c = contract();
+        let mut s = Session::new(&c, &header(&c), false).unwrap();
+        let mut frame = register(3, "motor");
+        let end = frame.len();
+        frame.extend([0xaa, 0xbb]);
+        assert_eq!(
+            s.decode_frame(&frame),
+            Err(DecodeError::BadFrame {
+                offset: end,
+                reason: "2 trailing bytes".into()
+            })
+        );
+    }
+
+    #[test]
+    fn resync_with_another_header_is_a_bad_frame() {
+        let c = contract();
+        let mut s = Session::new(&c, &header(&c), false).unwrap();
+        let mut same = wire::CTRL_RESYNC.to_le_bytes().to_vec();
+        same.extend(header(&c));
+        assert_eq!(s.decode_frame(&same), Ok(Event::Resync));
+
+        let mut other = wire::CTRL_RESYNC.to_le_bytes().to_vec();
+        other.extend(Header::new(c.hash(), 32_768).encode());
+        assert_eq!(
+            s.decode_frame(&other),
+            Err(DecodeError::BadFrame {
+                offset: 0,
+                reason: "resync header differs from the stream's".into()
+            })
+        );
+    }
+
+    #[test]
+    fn decoder_exposes_names_seen_so_far() {
+        let c = contract();
+        let mut bytes = header(&c).to_vec();
+        bytes.extend(register(2, "net"));
+        let mut d = Decoder::new(&c, &bytes, false).unwrap();
+        assert_eq!(d.ctx_name(2), None);
+        assert!(matches!(
+            d.next(),
+            Some(Ok(Event::CtxRegister { ctx: 2, .. }))
+        ));
+        assert_eq!(d.ctx_name(2), Some("net"));
+        assert_eq!(d.next(), None);
+    }
+}

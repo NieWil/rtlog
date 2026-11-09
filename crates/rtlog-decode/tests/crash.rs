@@ -22,7 +22,15 @@ fn crash_child() {
     if mode == "smallstack" {
         small_signal_stack();
     }
+    if mode == "errors" {
+        install_errors();
+        return;
+    }
     rtlog::crash::install(std::env::var(DIR_ENV).unwrap()).unwrap();
+    if mode == "details" {
+        truncation_and_drops();
+        return;
+    }
     // "drain": a drain is running and stuck inside a transport write, holding
     // the registry, when the crash happens. The dump must not depend on it.
     let _drain = (mode == "drain").then(|| {
@@ -124,6 +132,59 @@ fn crash_child() {
         m => panic!("unknown mode {m}"),
     }
     unreachable!("mode {mode} should have crashed");
+}
+
+/// Records the "details" child logs; more than its 64 KiB ring holds.
+const DETAIL_RECORDS: u32 = 10_000;
+
+/// Child mode "errors": what `install` refuses, and that a refused call
+/// leaves the handler installable. Writes one snapshot once installed.
+fn install_errors() {
+    let dir = std::path::PathBuf::from(std::env::var(DIR_ENV).unwrap());
+    rtlog::crash::snapshot("before install");
+    assert_eq!(rtlog::crash::dumps(), 0, "no handler, no dump");
+
+    let long = long_dir(&dir).join("x".repeat(250));
+    let e = rtlog::crash::install(&long).unwrap_err();
+    assert_eq!(e.kind(), std::io::ErrorKind::InvalidInput);
+    assert!(e.to_string().contains("too long"), "{e}");
+
+    let e = rtlog::crash::install("bad\0dir").unwrap_err();
+    assert_eq!(e.kind(), std::io::ErrorKind::InvalidInput, "{e}");
+
+    rtlog::crash::install(&dir).unwrap();
+    let e = rtlog::crash::install(&dir).unwrap_err();
+    assert_eq!(e.kind(), std::io::ErrorKind::AlreadyExists);
+    assert!(e.to_string().contains("already installed"), "{e}");
+
+    rtlog::crash::snapshot("installed");
+    assert_eq!(rtlog::crash::dumps(), 1);
+}
+
+/// Where the "errors" child puts its over-long directory: beside the dump
+/// directory, so the dump directory holds only dumps.
+fn long_dir(dump_dir: &std::path::Path) -> std::path::PathBuf {
+    let mut p = dump_dir.as_os_str().to_owned();
+    p.push(".long");
+    p.into()
+}
+
+/// Child mode "details": a context name and a message longer than a dump
+/// keeps, both cut inside a UTF-8 character; a ring that dropped frames; and
+/// a snapshot from a thread that never logged.
+fn truncation_and_drops() {
+    // 1 + 40 × 2 = 81 bytes; the dump keeps 64, which would split an "é".
+    rtlog::set_context_name(&format!("a{}", "é".repeat(40)));
+    let drops = rtlog::stats().drops;
+    for i in 0..DETAIL_RECORDS {
+        rtlog::info!("detail {}", i);
+    }
+    assert!(rtlog::stats().drops > drops, "the ring overflowed");
+    // 200 bytes; the record keeps 127, which would split a "ü".
+    std::thread::spawn(|| rtlog::crash::snapshot(&"ü".repeat(100)))
+        .join()
+        .unwrap();
+    assert_eq!(rtlog::crash::dumps(), 1);
 }
 
 /// A transport whose first write never returns: the drain holds the registry
@@ -572,5 +633,58 @@ fn snapshot_writes_a_dump_and_logging_continues() {
     assert_eq!(
         (crash.kind, crash.message.as_str()),
         (3, "watchdog: deadlock suspected")
+    );
+}
+
+/// `install` rejects an over-long path and a second call; a rejected call
+/// does not count as installed, and `snapshot` before `install` does nothing.
+#[test]
+fn install_rejects_bad_paths_and_a_second_call() {
+    let (status, json, text, diag) = run_child("errors");
+    let dir = std::env::temp_dir().join(format!("rtlog-crash-{}-errors", std::process::id()));
+    std::fs::remove_dir_all(long_dir(&dir)).ok();
+    assert!(status.success(), "{diag}");
+    let crash = text.crash.unwrap();
+    assert_eq!(
+        (crash.kind, crash.message.as_str()),
+        (3, "installed"),
+        "{json}"
+    );
+}
+
+/// Names and messages are cut at a character boundary, drops are reported,
+/// and a snapshot from a thread that never logged lands on context 0.
+#[test]
+fn a_dump_cuts_long_names_at_a_character_and_reports_drops() {
+    let (status, json, text, diag) = run_child("details");
+    assert!(status.success(), "{diag}");
+    let lines: Vec<serde_json::Value> = json
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let kept: Vec<_> = lines
+        .iter()
+        .filter(|l| l["type"] == "log" && l["message"].as_str().unwrap().starts_with("detail "))
+        .collect();
+    assert!(!kept.is_empty(), "{diag}");
+    let name = format!("a{}", "é".repeat(31)); // 63 bytes, not 64
+    assert!(
+        kept.iter().all(|l| l["ctx_name"] == name.as_str()),
+        "{diag}"
+    );
+    assert!(text.dropped > 0, "{diag}");
+    assert_eq!(
+        kept.len() as u64 + text.dropped,
+        u64::from(DETAIL_RECORDS),
+        "every record is either in the dump or counted as dropped\n{diag}"
+    );
+    let crash = text.crash.unwrap();
+    assert_eq!(crash.kind, 3);
+    assert_eq!(crash.message, "ü".repeat(63), "126 bytes, not 127");
+    let record = lines.last().unwrap();
+    assert_eq!(
+        (&record["type"], &record["ctx"]),
+        (&serde_json::json!("crash"), &serde_json::json!(0)),
+        "{diag}"
     );
 }

@@ -358,6 +358,20 @@ mod tests {
     }
 
     #[test]
+    fn nargs_accepts_up_to_32_arguments() {
+        // The macros evaluate it in a `const`; called at run time it must agree.
+        assert_eq!(crate::__private::nargs(0), 0);
+        assert_eq!(crate::__private::nargs(32), 32);
+    }
+
+    #[test]
+    #[should_panic(expected = "at most 32 arguments")]
+    fn nargs_rejects_33_arguments() {
+        let n = core::hint::black_box(33);
+        let _ = crate::__private::nargs(n);
+    }
+
+    #[test]
     fn sites_are_collected_with_unique_ids() {
         assert!(crate::site::sites().len() >= 9);
         assert!(crate::site::find_collision().is_none());
