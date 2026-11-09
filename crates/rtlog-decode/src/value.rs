@@ -207,6 +207,13 @@ mod tests {
     }
 
     #[test]
+    fn bool_false_parses() {
+        let mut input = &[Tag::Bool as u8, 0, 0xee][..];
+        assert_eq!(parse(&mut input), Ok(Value::Bool(false)));
+        assert_eq!(input, [0xee], "only the value's two bytes are consumed");
+    }
+
+    #[test]
     fn truncated_flag_survives() {
         let long = "z".repeat(300);
         match roundtrip(long.as_str()) {

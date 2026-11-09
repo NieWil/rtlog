@@ -282,3 +282,441 @@ pub fn contract_from_elf(data: &[u8]) -> Result<String, ElfError> {
     }
     Ok(out)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SHT_PROGBITS: u32 = 1;
+    /// Section type 4: relocations with explicit addends.
+    const SHT_RELOCS_ADDEND: u32 = 4;
+    const EM_ARM: u16 = 40;
+    const EM_X86_64: u16 = 62;
+    const R_X86_64_64: u64 = 1;
+    const R_X86_64_RELATIVE: u64 = 8;
+
+    /// One section of a synthetic image.
+    struct Sec {
+        name: &'static str,
+        kind: u32,
+        addr: u64,
+        data: Vec<u8>,
+        /// Size written in the section header; the data length unless changed.
+        size: u64,
+    }
+
+    fn sec(name: &'static str, addr: u64, data: Vec<u8>) -> Sec {
+        let size = data.len() as u64;
+        Sec {
+            name,
+            kind: SHT_PROGBITS,
+            addr,
+            data,
+            size,
+        }
+    }
+
+    /// A minimal ELF image: header, section contents, `.shstrtab`, section headers.
+    fn image(is64: bool, little: bool, machine: u16, secs: &[Sec]) -> Vec<u8> {
+        let put = |out: &mut Vec<u8>, v: u64, n: usize| {
+            let b = v.to_le_bytes();
+            if little {
+                out.extend_from_slice(&b[..n]);
+            } else {
+                out.extend(b[..n].iter().rev());
+            }
+        };
+        let pad = |v: &mut Vec<u8>| v.resize(v.len().next_multiple_of(8), 0);
+        let w = if is64 { 8 } else { 4 };
+        let (ehsize, shentsize) = if is64 { (64, 64) } else { (52, 40) };
+
+        let mut shstr = vec![0u8];
+        let mut names = Vec::new();
+        for n in secs.iter().map(|s| s.name).chain([".shstrtab"]) {
+            names.push(shstr.len() as u64);
+            shstr.extend_from_slice(n.as_bytes());
+            shstr.push(0);
+        }
+        let mut out = vec![0u8; ehsize];
+        pad(&mut out);
+        let mut offsets = Vec::new();
+        for d in secs.iter().map(|s| &s.data[..]).chain([&shstr[..]]) {
+            offsets.push(out.len() as u64);
+            out.extend_from_slice(d);
+            pad(&mut out);
+        }
+        let shoff = out.len() as u64;
+
+        let class = if is64 { 2 } else { 1 };
+        let data = if little { 1 } else { 2 };
+        let mut h = vec![0x7f, b'E', b'L', b'F', class, data, 1];
+        h.resize(16, 0);
+        put(&mut h, 3, 2); // ET_DYN
+        put(&mut h, u64::from(machine), 2);
+        put(&mut h, 1, 4); // EV_CURRENT
+        put(&mut h, 0, w); // entry
+        put(&mut h, 0, w); // phoff
+        put(&mut h, shoff, w);
+        put(&mut h, 0, 4); // flags
+        put(&mut h, ehsize as u64, 2);
+        put(&mut h, 0, 2); // phentsize
+        put(&mut h, 0, 2); // phnum
+        put(&mut h, shentsize as u64, 2);
+        put(&mut h, secs.len() as u64 + 2, 2);
+        put(&mut h, secs.len() as u64 + 1, 2);
+        out[..ehsize].copy_from_slice(&h);
+
+        out.resize(out.len() + shentsize, 0); // null section header
+        for i in 0..=secs.len() {
+            let (kind, flags, addr, size, entsize) = match secs.get(i) {
+                Some(s) if s.kind == SHT_RELOCS_ADDEND => (s.kind, 2, s.addr, s.size, 24),
+                Some(s) => (s.kind, 2, s.addr, s.size, 0), // SHF_ALLOC
+                None => (3, 0, 0, shstr.len() as u64, 0),  // SHT_STRTAB
+            };
+            put(&mut out, names[i], 4);
+            put(&mut out, u64::from(kind), 4);
+            put(&mut out, flags, w);
+            put(&mut out, addr, w);
+            put(&mut out, offsets[i], w);
+            put(&mut out, size, w);
+            put(&mut out, 0, 4); // link: no .dynsym, so relocation sections count as dynamic
+            put(&mut out, 0, 4); // info
+            put(&mut out, 1, w); // addralign
+            put(&mut out, entsize, w);
+        }
+        out
+    }
+
+    const RODATA: u64 = 0x1000;
+    const SITES: u64 = 0x2000;
+    /// `.rodata`: "app", "src/main.rs" and "x={}", each NUL-terminated so the
+    /// C layout can use the same strings.
+    const STRS: &[u8] = b"app\0src/main.rs\0x={}\0";
+    const APP: (u64, u64) = (RODATA, 3);
+    const MAIN_RS: (u64, u64) = (RODATA + 4, 11);
+    const FMT: (u64, u64) = (RODATA + 16, 4);
+
+    /// A Rust `linkme_SITES` descriptor, ID 0x1234, for a `w`-byte pointer target.
+    fn rust_site(w: usize, level: u8, strs: [(u64, u64); 3]) -> Vec<u8> {
+        let mut e = 0x1234u32.to_le_bytes().to_vec();
+        e.extend([0, level, 1, 0]); // kind log, level, nargs, reserved
+        e.extend(7u32.to_le_bytes());
+        e.extend(5u32.to_le_bytes());
+        for (p, n) in strs {
+            e.extend(&p.to_le_bytes()[..w]);
+            e.extend(&n.to_le_bytes()[..w]);
+        }
+        e
+    }
+
+    /// A C `rtlog_sites` descriptor (`rtlog.h`) for a 64-bit target, line 42.
+    fn c_site(magic: &[u8; 4], level: u8, kind: u8, ptrs: [u64; 3]) -> Vec<u8> {
+        let mut e = magic.to_vec();
+        e.extend(42u32.to_le_bytes());
+        e.extend([level, 1, kind, 0, 0, 0, 0, 0]);
+        for p in ptrs {
+            e.extend(p.to_le_bytes());
+        }
+        e
+    }
+
+    const RUST_LINE: &str = r#"{"id":4660,"level":"info","module":"app","file":"src/main.rs","line":7,"column":5,"fmt":"x={}","nargs":1}"#;
+
+    fn rust_image(is64: bool, machine: u16, sites: Vec<u8>) -> Vec<u8> {
+        image(
+            is64,
+            true,
+            machine,
+            &[
+                sec(".rodata", RODATA, STRS.to_vec()),
+                sec("linkme_SITES", SITES, sites),
+            ],
+        )
+    }
+
+    fn c_image(sites: Vec<u8>) -> Vec<u8> {
+        image(
+            true,
+            true,
+            EM_X86_64,
+            &[
+                sec(".rodata", RODATA, STRS.to_vec()),
+                sec("rtlog_sites", SITES, sites),
+            ],
+        )
+    }
+
+    #[test]
+    fn errors_display() {
+        assert_eq!(
+            ElfError::Parse("short".into()).to_string(),
+            "not a readable ELF file: short"
+        );
+        assert!(ElfError::NoSites
+            .to_string()
+            .starts_with("no rtlog site section (linkme_SITES or rtlog_sites)"));
+        assert_eq!(
+            ElfError::BadEntry {
+                index: 3,
+                reason: "bad level".into()
+            }
+            .to_string(),
+            "site descriptor 3: bad level"
+        );
+    }
+
+    #[test]
+    fn non_elf_data_is_a_parse_error() {
+        let e = contract_from_elf(b"\x7fELG not an image, just text").unwrap_err();
+        assert!(matches!(e, ElfError::Parse(_)), "{e:?}");
+        assert!(
+            e.to_string().starts_with("not a readable ELF file: "),
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn truncated_header_is_a_parse_error() {
+        let full = rust_image(true, EM_X86_64, rust_site(8, 2, [APP, MAIN_RS, FMT]));
+        assert!(matches!(
+            contract_from_elf(&full[..40]),
+            Err(ElfError::Parse(_))
+        ));
+    }
+
+    #[test]
+    fn big_endian_image_is_rejected() {
+        let data = image(
+            false,
+            false,
+            EM_ARM,
+            &[sec(".rodata", RODATA, STRS.to_vec())],
+        );
+        assert_eq!(
+            contract_from_elf(&data),
+            Err(ElfError::Parse(
+                "big-endian images are not supported".into()
+            ))
+        );
+    }
+
+    #[test]
+    fn image_without_site_sections_has_no_sites() {
+        let data = image(
+            true,
+            true,
+            EM_X86_64,
+            &[sec(".rodata", RODATA, STRS.to_vec())],
+        );
+        assert_eq!(contract_from_elf(&data), Err(ElfError::NoSites));
+    }
+
+    #[test]
+    fn rust_descriptor_64_bit_becomes_a_contract_line() {
+        let data = rust_image(true, EM_X86_64, rust_site(8, 2, [APP, MAIN_RS, FMT]));
+        let jsonl = contract_from_elf(&data).unwrap();
+        assert_eq!(jsonl, format!("{RUST_LINE}\n"));
+        let c = crate::Contract::from_jsonl(&jsonl).unwrap();
+        assert_eq!(c.site(0x1234).unwrap().fmt, "x={}");
+    }
+
+    #[test]
+    fn rust_descriptor_32_bit_reads_4_byte_pointers() {
+        let mut sites = rust_site(4, 2, [APP, MAIN_RS, FMT]);
+        sites[4] = 1; // a span site
+        let data = rust_image(false, EM_ARM, sites);
+        let want = RUST_LINE.replace("\"nargs\":1}", "\"nargs\":1,\"kind\":\"span\"}");
+        assert_eq!(contract_from_elf(&data).unwrap(), format!("{want}\n"));
+    }
+
+    #[test]
+    fn rust_descriptor_with_bad_level_is_rejected() {
+        let data = rust_image(true, EM_X86_64, rust_site(8, 5, [APP, MAIN_RS, FMT]));
+        assert_eq!(
+            contract_from_elf(&data),
+            Err(ElfError::BadEntry {
+                index: 0,
+                reason: "bad level".into()
+            })
+        );
+    }
+
+    #[test]
+    fn pointer_outside_the_image_is_rejected() {
+        let data = rust_image(
+            true,
+            EM_X86_64,
+            rust_site(8, 2, [(0x9000, 3), MAIN_RS, FMT]),
+        );
+        assert_eq!(
+            contract_from_elf(&data),
+            Err(ElfError::BadEntry {
+                index: 0,
+                reason: "module pointer 0x9000 is outside the image".into()
+            })
+        );
+    }
+
+    #[test]
+    fn string_running_past_its_section_is_rejected() {
+        // Starts inside `.rodata` but claims more bytes than the section holds.
+        let data = rust_image(
+            true,
+            EM_X86_64,
+            rust_site(8, 2, [APP, (MAIN_RS.0, 500), FMT]),
+        );
+        assert_eq!(
+            contract_from_elf(&data).unwrap_err().to_string(),
+            "site descriptor 0: file pointer 0x1004 is outside the image"
+        );
+    }
+
+    #[test]
+    fn non_utf8_string_is_rejected() {
+        let data = image(
+            true,
+            true,
+            EM_X86_64,
+            &[
+                sec(".rodata", RODATA, b"\xff\xfe\xfd".to_vec()),
+                sec("linkme_SITES", SITES, rust_site(8, 2, [APP, APP, APP])),
+            ],
+        );
+        assert_eq!(
+            contract_from_elf(&data),
+            Err(ElfError::BadEntry {
+                index: 0,
+                reason: "module is not UTF-8".into()
+            })
+        );
+    }
+
+    #[test]
+    fn site_section_past_end_of_file_is_a_parse_error() {
+        for name in ["linkme_SITES", "rtlog_sites"] {
+            let mut s = sec(name, SITES, vec![0; 8]);
+            s.size = 1 << 20;
+            let data = image(true, true, EM_X86_64, &[s]);
+            assert!(
+                matches!(contract_from_elf(&data), Err(ElfError::Parse(_))),
+                "{name}"
+            );
+        }
+    }
+
+    /// A PIE leaves pointer fields zero and stores the target in a RELATIVE
+    /// relocation's addend; only RELATIVE relocations of a zero field apply.
+    #[test]
+    fn relative_relocations_fill_zero_pointers() {
+        let sites = rust_site(8, 2, [(0, 3), MAIN_RS, FMT]);
+        let reloc = |off: u64, ty: u64, addend: u64| {
+            let mut r = (SITES + off).to_le_bytes().to_vec();
+            r.extend(ty.to_le_bytes()); // symbol 0, type `ty`
+            r.extend(addend.to_le_bytes());
+            r
+        };
+        let mut relocs = reloc(16, R_X86_64_RELATIVE, APP.0); // module: zero field, applied
+        relocs.extend(reloc(32, R_X86_64_RELATIVE, 0x9999)); // file: non-zero field, kept
+        relocs.extend(reloc(48, R_X86_64_64, 0x9999)); // fmt: not RELATIVE, ignored
+        let mut r = sec(".relocs", 0x3000, relocs);
+        r.kind = SHT_RELOCS_ADDEND;
+        let data = image(
+            true,
+            true,
+            EM_X86_64,
+            &[
+                sec(".rodata", RODATA, STRS.to_vec()),
+                sec("linkme_SITES", SITES, sites),
+                r,
+            ],
+        );
+        assert_eq!(contract_from_elf(&data).unwrap(), format!("{RUST_LINE}\n"));
+    }
+
+    #[test]
+    fn c_descriptors_are_numbered_from_one() {
+        // Pointers are fmt, file, func; strings are NUL-terminated.
+        let mut sites = c_site(b"RTLS", 3, 0, [FMT.0, MAIN_RS.0, APP.0]);
+        sites.extend(c_site(b"RTLS", 0, 1, [APP.0, MAIN_RS.0, APP.0]));
+        assert_eq!(
+            contract_from_elf(&c_image(sites)).unwrap(),
+            concat!(
+                r#"{"id":1,"level":"warn","module":"app","file":"src/main.rs","line":42,"column":0,"fmt":"x={}","nargs":1}"#,
+                "\n",
+                r#"{"id":2,"level":"trace","module":"app","file":"src/main.rs","line":42,"column":0,"fmt":"app","nargs":1,"kind":"span"}"#,
+                "\n"
+            )
+        );
+    }
+
+    #[test]
+    fn c_descriptor_with_bad_magic_is_rejected() {
+        let mut sites = c_site(b"RTLS", 2, 0, [FMT.0, MAIN_RS.0, APP.0]);
+        sites.extend(c_site(b"XXXX", 2, 0, [FMT.0, MAIN_RS.0, APP.0]));
+        assert_eq!(
+            contract_from_elf(&c_image(sites)),
+            Err(ElfError::BadEntry {
+                index: 1,
+                reason: "bad magic".into()
+            })
+        );
+    }
+
+    #[test]
+    fn c_descriptor_with_bad_level_is_rejected() {
+        let sites = c_site(b"RTLS", 9, 0, [FMT.0, MAIN_RS.0, APP.0]);
+        assert_eq!(
+            contract_from_elf(&c_image(sites)),
+            Err(ElfError::BadEntry {
+                index: 0,
+                reason: "bad level".into()
+            })
+        );
+    }
+
+    #[test]
+    fn c_string_without_terminator_is_rejected() {
+        let data = image(
+            true,
+            true,
+            EM_X86_64,
+            &[
+                sec(".rodata", RODATA, b"no nul here".to_vec()),
+                sec("rtlog_sites", SITES, c_site(b"RTLS", 2, 0, [RODATA; 3])),
+            ],
+        );
+        assert_eq!(
+            contract_from_elf(&data).unwrap_err().to_string(),
+            "site descriptor 0: fmt pointer 0x1000 is outside the image"
+        );
+    }
+
+    #[test]
+    fn rust_and_c_sites_merge_sorted_by_id() {
+        let data = image(
+            true,
+            true,
+            EM_X86_64,
+            &[
+                sec(".rodata", RODATA, STRS.to_vec()),
+                sec("linkme_SITES", SITES, rust_site(8, 2, [APP, MAIN_RS, FMT])),
+                sec(
+                    "rtlog_sites",
+                    0x4000,
+                    c_site(b"RTLS", 2, 0, [FMT.0, MAIN_RS.0, APP.0]),
+                ),
+            ],
+        );
+        let jsonl = contract_from_elf(&data).unwrap();
+        let ids: Vec<u64> = jsonl
+            .lines()
+            .map(|l| {
+                serde_json::from_str::<serde_json::Value>(l).unwrap()["id"]
+                    .as_u64()
+                    .unwrap()
+            })
+            .collect();
+        assert_eq!(ids, [1, 0x1234]);
+        assert_eq!(crate::Contract::from_jsonl(&jsonl).unwrap().len(), 2);
+    }
+}

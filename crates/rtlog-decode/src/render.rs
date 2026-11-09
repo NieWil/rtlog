@@ -187,6 +187,23 @@ mod tests {
     }
 
     #[test]
+    fn hex_and_binary_specs_on_other_types() {
+        let bytes = Value::Bytes {
+            bytes: vec![0xde, 0xad],
+            truncated: false,
+        };
+        assert_eq!(format("{:X}", &[bytes]), "DEAD");
+        assert_eq!(format("{:b}", &[Value::I(6)]), "110");
+        assert_eq!(format("{:b}", &[Value::I(-1)]), "1".repeat(64));
+        // Hex and binary of a value with no integer form print it plainly.
+        assert_eq!(
+            format("{:x} {:X}", &[s("ab"), Value::Bool(true)]),
+            "ab true"
+        );
+        assert_eq!(format("{:b}", &[Value::F(1.5)]), "1.5");
+    }
+
+    #[test]
     fn escapes_and_mismatches() {
         assert_eq!(format("{{}} {}", &[Value::U(1)]), "{} 1");
         assert_eq!(format("{} {}", &[Value::U(1)]), "1 {?}");
