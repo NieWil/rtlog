@@ -138,12 +138,25 @@ fn hardware_divide_by_zero() {
     }
 }
 
-/// Run the child in `mode`; returns (exit status, decoded crash file as JSON lines).
-fn run_child(mode: &str) -> (std::process::ExitStatus, String, rtlog_decode::Decoded) {
-    let (status, mut dumps) = run_child_all(mode);
-    assert_eq!(dumps.len(), 1, "one dump for {mode}");
+/// What a failing assertion prints about a child run: its exit status, its
+/// stderr and the shape of each dump (size, contexts, first and last lines),
+/// so a failure seen only in CI shows where the dump stopped.
+type Diag = String;
+
+/// Run the child in `mode`; returns (exit status, decoded crash file as JSON
+/// lines and as text, diagnostics).
+fn run_child(
+    mode: &str,
+) -> (
+    std::process::ExitStatus,
+    String,
+    rtlog_decode::Decoded,
+    Diag,
+) {
+    let (status, mut dumps, diag) = run_child_all(mode);
+    assert_eq!(dumps.len(), 1, "one dump for {mode}\n{diag}");
     let (json, text) = dumps.remove(0);
-    (status, json, text)
+    (status, json, text, diag)
 }
 
 /// Run the child in `mode` with its dump directory `dir`; returns its exit
@@ -195,6 +208,7 @@ fn run_child_all(
 ) -> (
     std::process::ExitStatus,
     Vec<(String, rtlog_decode::Decoded)>,
+    Diag,
 ) {
     let dir = std::env::temp_dir().join(format!("rtlog-crash-{}-{mode}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -238,34 +252,77 @@ fn run_child_all(
         String::from_utf8_lossy(&out.stderr)
     );
     let contract = Contract::from_jsonl(&rtlog::contract::to_jsonl()).unwrap();
+    let mut diag = format!(
+        "child {mode}: {:?}\nchild stderr:\n{}",
+        out.status,
+        String::from_utf8_lossy(&out.stderr)
+    );
     let dumps = files
         .iter()
         .map(|file| {
             let name = file.file_name().unwrap().to_string_lossy().into_owned();
             assert!(
                 name.starts_with("crash-") && name.ends_with(".rtlog"),
-                "{name}"
+                "{name}\n{diag}"
             );
             let bytes = std::fs::read(file).unwrap();
             let json = decode(&contract, &bytes, Output::Json, false).unwrap();
             let text = decode(&contract, &bytes, Output::Text, false).unwrap();
-            assert_eq!(json.error, None, "crash file {name} decodes cleanly");
+            diag.push_str(&dump_summary(&name, &bytes, &json.text, &text.text));
+            assert_eq!(
+                json.error, None,
+                "crash file {name} decodes cleanly\n{diag}"
+            );
             (json.text, text)
         })
         .collect();
     std::fs::remove_dir_all(&dir).ok();
-    (out.status, dumps)
+    (out.status, dumps, diag)
+}
+
+/// Size, records per context and the first and last text lines of one dump.
+fn dump_summary(name: &str, bytes: &[u8], json: &str, text: &str) -> String {
+    let mut per_ctx: Vec<(String, usize)> = Vec::new();
+    for line in json.lines() {
+        let v: serde_json::Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let ctx = format!("{}/{}", v["ctx_name"], v["type"]);
+        match per_ctx.iter_mut().find(|(c, _)| *c == ctx) {
+            Some((_, n)) => *n += 1,
+            None => per_ctx.push((ctx, 1)),
+        }
+    }
+    let lines: Vec<&str> = text.lines().collect();
+    let head = lines
+        .iter()
+        .take(8)
+        .copied()
+        .collect::<Vec<_>>()
+        .join("\n  ");
+    let tail = lines
+        .iter()
+        .skip(lines.len().saturating_sub(8).max(8))
+        .copied()
+        .collect::<Vec<_>>()
+        .join("\n  ");
+    format!(
+        "dump {name}: {} bytes, {} text lines, records by context/type: {per_ctx:?}\n  first:\n  {head}\n  last:\n  {tail}\n",
+        bytes.len(),
+        lines.len()
+    )
 }
 
 /// Every record logged before the crash is in the dump, in order, and the
 /// crash record comes last.
-fn check_dump(json: &str, text: &rtlog_decode::Decoded) {
-    check_dump_on(json, text, Some("main"));
+fn check_dump(json: &str, text: &rtlog_decode::Decoded, diag: &str) {
+    check_dump_on(json, text, Some("main"), diag);
 }
 
 /// As [`check_dump`]; `crashing` names the context the crash record must be on,
 /// or `None` when either of two racing threads may be the one.
-fn check_dump_on(json: &str, text: &rtlog_decode::Decoded, crashing: Option<&str>) {
+fn check_dump_on(json: &str, text: &rtlog_decode::Decoded, crashing: Option<&str>, diag: &str) {
     let lines: Vec<serde_json::Value> = json
         .lines()
         .map(|l| serde_json::from_str(l).unwrap())
@@ -280,26 +337,29 @@ fn check_dump_on(json: &str, text: &rtlog_decode::Decoded, crashing: Option<&str
     assert_eq!(
         main,
         (0..u64::from(MAIN_RECORDS)).collect::<Vec<_>>(),
-        "all main-thread records, in order"
+        "all main-thread records, in order\n{diag}"
     );
     let worker = lines.iter().filter(|l| l["ctx_name"] == "worker").count();
     assert_eq!(
         worker as u32, WORKER_RECORDS,
-        "the finished worker thread's records too"
+        "the finished worker thread's records too\n{diag}"
     );
-    assert!(lines.iter().any(|l| l["message"]
-        .as_str()
-        .is_some_and(|m| m.starts_with("about to fail"))));
+    assert!(
+        lines.iter().any(|l| l["message"]
+            .as_str()
+            .is_some_and(|m| m.starts_with("about to fail"))),
+        "the last record before the crash\n{diag}"
+    );
     assert_eq!(
         lines.last().unwrap()["type"],
         "crash",
-        "crash record is last"
+        "crash record is last\n{diag}"
     );
     if let Some(name) = crashing {
         assert_eq!(
             lines.last().unwrap()["ctx_name"],
             name,
-            "on the crashing thread"
+            "on the crashing thread\n{diag}"
         );
     }
     // Times stay monotonic per context although earlier frames went nowhere.
@@ -308,19 +368,22 @@ fn check_dump_on(json: &str, text: &rtlog_decode::Decoded, crashing: Option<&str
         .filter(|l| l["ctx_name"] == "main")
         .map(|l| l["ts_ns"].as_u64().unwrap())
         .collect();
-    assert!(ts.windows(2).all(|w| w[0] <= w[1]));
+    assert!(
+        ts.windows(2).all(|w| w[0] <= w[1]),
+        "monotonic times\n{diag}"
+    );
     let last = text.text.lines().last().unwrap();
     assert!(
         last.contains(" CRASH ") || last.contains(" SNAP "),
-        "last text line: {last}"
+        "last text line: {last}\n{diag}"
     );
 }
 
 #[test]
 fn division_by_zero_panic_is_logged() {
-    let (status, json, text) = run_child("div0");
-    assert!(!status.success());
-    check_dump(&json, &text);
+    let (status, json, text, diag) = run_child("div0");
+    assert!(!status.success(), "{diag}");
+    check_dump(&json, &text, &diag);
     let crash = text.crash.unwrap();
     assert_eq!(crash.kind, 1);
     assert!(
@@ -332,9 +395,9 @@ fn division_by_zero_panic_is_logged() {
 
 #[test]
 fn segfault_is_logged() {
-    let (status, json, text) = run_child("segv");
-    assert_eq!(status.signal(), Some(libc::SIGSEGV), "{status:?}");
-    check_dump(&json, &text);
+    let (status, json, text, diag) = run_child("segv");
+    assert_eq!(status.signal(), Some(libc::SIGSEGV), "{status:?}\n{diag}");
+    check_dump(&json, &text, &diag);
     let crash = text.crash.unwrap();
     assert_eq!(
         (crash.kind, crash.signal, crash.addr),
@@ -344,17 +407,17 @@ fn segfault_is_logged() {
 
 #[test]
 fn hardware_division_by_zero_is_logged() {
-    let (status, json, text) = run_child("fpe");
-    assert_eq!(status.signal(), Some(libc::SIGFPE), "{status:?}");
-    check_dump(&json, &text);
+    let (status, json, text, diag) = run_child("fpe");
+    assert_eq!(status.signal(), Some(libc::SIGFPE), "{status:?}\n{diag}");
+    check_dump(&json, &text, &diag);
     assert_eq!(text.crash.unwrap().signal, libc::SIGFPE);
 }
 
 #[test]
 fn abort_is_logged() {
-    let (status, json, text) = run_child("abort");
-    assert_eq!(status.signal(), Some(libc::SIGABRT), "{status:?}");
-    check_dump(&json, &text);
+    let (status, json, text, diag) = run_child("abort");
+    assert_eq!(status.signal(), Some(libc::SIGABRT), "{status:?}\n{diag}");
+    check_dump(&json, &text, &diag);
     assert_eq!(text.crash.unwrap().signal, libc::SIGABRT);
 }
 
@@ -363,9 +426,9 @@ fn abort_is_logged() {
 /// every record, because it does not wait for the drain.
 #[test]
 fn crash_while_the_drain_is_blocked_in_a_write_still_dumps_everything() {
-    let (status, json, text) = run_child("drain");
-    assert_eq!(status.signal(), Some(libc::SIGSEGV), "{status:?}");
-    check_dump(&json, &text);
+    let (status, json, text, diag) = run_child("drain");
+    assert_eq!(status.signal(), Some(libc::SIGSEGV), "{status:?}\n{diag}");
+    check_dump(&json, &text, &diag);
 }
 
 /// A file from an earlier run with the same pid is never overwritten.
@@ -400,18 +463,18 @@ fn a_flood_of_soft_dumps_is_capped_but_a_fatal_one_still_lands() {
 /// Two threads fault together: one complete dump, process killed by the signal.
 #[test]
 fn two_threads_crashing_at_once_leave_one_complete_dump() {
-    let (status, json, text) = run_child("two");
-    assert_eq!(status.signal(), Some(libc::SIGSEGV), "{status:?}");
-    check_dump_on(&json, &text, None);
+    let (status, json, text, diag) = run_child("two");
+    assert_eq!(status.signal(), Some(libc::SIGSEGV), "{status:?}\n{diag}");
+    check_dump_on(&json, &text, None, &diag);
 }
 
 /// Each dump is a new numbered file: two caught panics give two files, and
 /// the second does not overwrite the first.
 #[test]
 fn each_dump_is_a_new_file() {
-    let (status, dumps) = run_child_all("panics");
-    assert!(status.success());
-    assert_eq!(dumps.len(), 2);
+    let (status, dumps, diag) = run_child_all("panics");
+    assert!(status.success(), "{diag}");
+    assert_eq!(dumps.len(), 2, "{diag}");
     for (i, (_, text)) in dumps.iter().enumerate() {
         let crash = text.crash.as_ref().unwrap();
         assert_eq!(crash.kind, 1);
@@ -430,9 +493,9 @@ fn each_dump_is_a_new_file() {
 
 #[test]
 fn snapshot_writes_a_dump_and_logging_continues() {
-    let (status, json, text) = run_child("snapshot");
-    assert!(status.success());
-    check_dump(&json, &text);
+    let (status, json, text, diag) = run_child("snapshot");
+    assert!(status.success(), "{diag}");
+    check_dump(&json, &text, &diag);
     let crash = text.crash.unwrap();
     assert_eq!(
         (crash.kind, crash.message.as_str()),
