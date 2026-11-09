@@ -178,6 +178,9 @@ fn new_local() -> Local {
         closed_seq: AtomicU64::new(0),
     });
     shared.ring.mark_split(ctx);
+    // A signal stack big enough for the crash dump, if the handler is installed.
+    #[cfg(unix)]
+    crate::crash::prepare_thread();
     LIVE_CONTEXTS.fetch_add(1, Ordering::Relaxed);
     lock(&RINGS).push(shared.clone());
     lock(&PENDING).push(Entry {

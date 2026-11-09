@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Crash dumps of debug builds were lost on many x86-64 CPUs.** On a fatal signal the handler ran on the alternate signal stack Rust gives each thread, `max(SIGSTKSZ, AT_MINSIGSTKSZ)`, which is 8 KiB on CPUs without AMX. A debug build's dump needs more once the CPU's saved state is on it, so it overflowed: the file held only the stream header and the process died of `SIGSEGV` instead of the original signal. Release builds fit, with little margin. The handler now runs on its own 64 KiB stack with a guard page, set up by `crash::install` for the calling thread and for every thread when it first logs after that (`crash::SIGNAL_STACK`). A new test forces an 8 KiB default stack. This was the crash-test failure seen now and then in CI.
 - Release: crates.io publishing uses Trusted Publishing; the `CARGO_REGISTRY_TOKEN` secret is no longer needed.
 
 ## v0.2.3 — on crates.io

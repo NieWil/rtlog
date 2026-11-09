@@ -31,7 +31,16 @@
 //! sent, never lose one. After the dump the default action runs (core dump,
 //! exit status shows the signal). On a panic the previous panic hook runs
 //! after the dump, and logging keeps working.
+//!
+//! The handler runs on its own alternate signal stack of [`SIGNAL_STACK`]
+//! bytes, with a guard page below it. [`install`] sets one up for the calling
+//! thread, and every thread gets one when it first logs after that. The
+//! default one Rust gives a thread is `max(SIGSTKSZ, AT_MINSIGSTKSZ)`, often
+//! 8 KiB, and the CPU's saved state takes up to a few KiB of it: too little
+//! for the dump in a debug build. A thread that never logs keeps its default
+//! stack.
 
+use std::cell::OnceCell;
 use std::ffi::CString;
 use std::io;
 use std::os::unix::ffi::OsStrExt;
@@ -76,6 +85,99 @@ static FATAL: AtomicBool = AtomicBool::new(false);
 /// Set when the fatal dump is finished.
 static DUMP_DONE: AtomicBool = AtomicBool::new(false);
 
+/// Bytes of alternate signal stack the handler runs on (see the module docs).
+pub const SIGNAL_STACK: usize = 64 * 1024;
+
+thread_local! {
+    /// This thread's own signal stack, if it needed one; unmapped at thread exit.
+    static OWN_STACK: OnceCell<Option<SignalStack>> = const { OnceCell::new() };
+}
+
+/// Give the calling thread a [`SIGNAL_STACK`]-byte alternate signal stack
+/// unless it already has one at least that large. Called by [`install`] and
+/// when a thread registers its ring; does nothing before [`install`].
+pub(crate) fn prepare_thread() {
+    if PREFIX.get().is_none() {
+        return;
+    }
+    let _ = OWN_STACK.try_with(|s| {
+        s.get_or_init(SignalStack::new);
+    });
+}
+
+/// An `mmap`ed alternate signal stack with a guard page below it, so an
+/// overflow faults instead of overwriting whatever lies below.
+struct SignalStack {
+    base: *mut libc::c_void,
+    len: usize,
+    sp: *mut libc::c_void,
+}
+
+impl SignalStack {
+    fn new() -> Option<SignalStack> {
+        // SAFETY: plain sigaltstack/mmap/mprotect calls on memory we own.
+        unsafe {
+            let mut cur: libc::stack_t = core::mem::zeroed();
+            if libc::sigaltstack(core::ptr::null(), &mut cur) != 0
+                || cur.ss_flags & libc::SS_ONSTACK != 0
+                || (cur.ss_flags & libc::SS_DISABLE == 0 && cur.ss_size >= SIGNAL_STACK)
+            {
+                return None;
+            }
+            let page = match libc::sysconf(libc::_SC_PAGESIZE) {
+                n if n > 0 => n as usize,
+                _ => 4096,
+            };
+            let len = SIGNAL_STACK + page;
+            let base = libc::mmap(
+                core::ptr::null_mut(),
+                len,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_ANON,
+                -1,
+                0,
+            );
+            if base == libc::MAP_FAILED {
+                return None;
+            }
+            let sp = base.cast::<u8>().add(page).cast::<libc::c_void>();
+            let st = libc::stack_t {
+                ss_sp: sp,
+                ss_flags: 0,
+                ss_size: SIGNAL_STACK,
+            };
+            if libc::mprotect(base, page, libc::PROT_NONE) != 0
+                || libc::sigaltstack(&st, core::ptr::null_mut()) != 0
+            {
+                libc::munmap(base, len);
+                return None;
+            }
+            Some(SignalStack { base, len, sp })
+        }
+    }
+}
+
+impl Drop for SignalStack {
+    fn drop(&mut self) {
+        // SAFETY: as above; the stack is disabled before it is unmapped.
+        unsafe {
+            let mut cur: libc::stack_t = core::mem::zeroed();
+            if libc::sigaltstack(core::ptr::null(), &mut cur) == 0 && cur.ss_sp == self.sp {
+                if cur.ss_flags & libc::SS_ONSTACK != 0 {
+                    return; // still running on it: leak rather than unmap it
+                }
+                let off = libc::stack_t {
+                    ss_sp: core::ptr::null_mut(),
+                    ss_flags: libc::SS_DISABLE,
+                    ss_size: 0,
+                };
+                libc::sigaltstack(&off, core::ptr::null_mut());
+            }
+            libc::munmap(self.base, self.len);
+        }
+    }
+}
+
 /// Install the crash handler. Dumps go to `dir` (created if missing) as
 /// `crash-<pid>-<n>.rtlog`; `n` counts up from 1 and skips names that exist.
 ///
@@ -104,6 +206,7 @@ pub fn install(dir: impl AsRef<Path>) -> io::Result<()> {
         ));
     }
     HEADER.get_or_init(|| Header::new(crate::site::contract_hash(), crate::clock::hz()).encode());
+    prepare_thread();
 
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {

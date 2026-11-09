@@ -19,6 +19,9 @@ fn crash_child() {
     let Ok(mode) = std::env::var(CHILD_ENV) else {
         return;
     };
+    if mode == "smallstack" {
+        small_signal_stack();
+    }
     rtlog::crash::install(std::env::var(DIR_ENV).unwrap()).unwrap();
     // "drain": a drain is running and stuck inside a transport write, holding
     // the registry, when the crash happens. The dump must not depend on it.
@@ -49,7 +52,7 @@ fn crash_child() {
         }
         "segv" => unsafe { core::ptr::write_volatile(black_box(core::ptr::null_mut::<u32>()), 1) },
         "fpe" => hardware_divide_by_zero(),
-        "abort" => std::process::abort(),
+        "abort" | "smallstack" => std::process::abort(),
         "snapshot" => {
             rtlog::crash::snapshot("watchdog: deadlock suspected");
             rtlog::info!("still logging after snapshot {}", 1u8);
@@ -142,6 +145,35 @@ fn hardware_divide_by_zero() {
 /// stderr and the shape of each dump (size, contexts, first and last lines),
 /// so a failure seen only in CI shows where the dump stopped.
 type Diag = String;
+
+/// Give the calling thread an 8 KiB alternate signal stack with a guard page
+/// below it: what Rust's std gives every thread on CPUs whose
+/// `AT_MINSIGSTKSZ` is under 8 KiB (most x86-64 without AMX). On such a stack
+/// the dump of a debug build used to overflow into the guard page.
+fn small_signal_stack() {
+    const SIZE: usize = 8192;
+    // SAFETY: plain mmap/mprotect/sigaltstack on memory this function owns and
+    // leaks for the rest of the (short-lived) child process.
+    unsafe {
+        let page = 4096;
+        let base = libc::mmap(
+            core::ptr::null_mut(),
+            SIZE + page,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_PRIVATE | libc::MAP_ANON,
+            -1,
+            0,
+        );
+        assert!(base != libc::MAP_FAILED);
+        assert_eq!(libc::mprotect(base, page, libc::PROT_NONE), 0);
+        let st = libc::stack_t {
+            ss_sp: base.cast::<u8>().add(page).cast(),
+            ss_flags: 0,
+            ss_size: SIZE,
+        };
+        assert_eq!(libc::sigaltstack(&st, core::ptr::null_mut()), 0);
+    }
+}
 
 /// Run the child in `mode`; returns (exit status, decoded crash file as JSON
 /// lines and as text, diagnostics).
@@ -419,6 +451,17 @@ fn abort_is_logged() {
     assert_eq!(status.signal(), Some(libc::SIGABRT), "{status:?}\n{diag}");
     check_dump(&json, &text, &diag);
     assert_eq!(text.crash.unwrap().signal, libc::SIGABRT);
+}
+
+/// A thread whose default signal stack is only 8 KiB still gets a complete
+/// dump: `install` gives it a bigger one. Without that, a debug build
+/// overflowed the small stack, wrote only the stream header and died of
+/// SIGSEGV instead of the original signal.
+#[test]
+fn a_small_default_signal_stack_still_gives_a_complete_dump() {
+    let (status, json, text, diag) = run_child("smallstack");
+    assert_eq!(status.signal(), Some(libc::SIGABRT), "{status:?}\n{diag}");
+    check_dump(&json, &text, &diag);
 }
 
 /// The realistic case: a drain is running and stuck in a transport write
