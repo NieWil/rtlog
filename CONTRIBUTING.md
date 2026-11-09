@@ -14,7 +14,17 @@ The demo measures what a log call costs on your machine. To add your board to [r
 
 2. Either **open an issue** with the [board results form](https://github.com/NieWil/rtlog/issues/new?template=board-results.yml) and paste `timing.md`, or **open a pull request** that adds it as `results/<version>/<board>.md` (for example `results/0.2.4/raspberry-pi-5.md`) and runs `python3 scripts/results.py` to refresh the index.
 
-CI checks that each results file names its version, board, CPU, OS and Rust version, and that it sits in the folder of its version. Results are never edited after they are merged; a new version gets a new file.
+**On a microcontroller** with Zephyr, flash the benchmark firmware ([`c/zephyr/samples/benchmark`](c/zephyr/samples/benchmark), see [Zephyr](docs/zephyr.md)), capture its serial output to a file, and turn it into a report:
+
+```sh
+python3 scripts/results.py mcu capture.txt --board "ST NUCLEO-L432KC" --cpu "Arm Cortex-M4F (STM32L432KC)" \
+  --os "Zephyr 4.2.0" --rtlog 0.2.4 --toolchain "Zephyr SDK 0.17.2, GCC 12.2.0, -O2" \
+  --target nucleo_l432kc/stm32l432xx --out results/0.2.4/st-nucleo-l432kc.md
+```
+
+Pass several captures (one per reset) to combine runs. [`results/0.2.2/st-nucleo-l432kc.md`](results/0.2.2/st-nucleo-l432kc.md) is an example.
+
+CI checks that each results file names its version, board, CPU, OS and Rust version (toolchain and API for microcontrollers), and that it sits in the folder of its version. Results are never edited after they are merged; a new version gets a new file.
 
 ## How quality is enforced
 
