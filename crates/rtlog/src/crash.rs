@@ -803,7 +803,17 @@ mod tests {
     #[test]
     fn a_thread_gets_one_signal_stack_and_loses_it_on_drop() {
         std::thread::spawn(|| {
-            let s = SignalStack::new().expect("a new thread has a small signal stack or none");
+            // Start from no signal stack on every OS: Rust gives a thread 8 KiB
+            // on most Linux x86-64 CPUs but 128 KiB on macOS, which is large
+            // enough that `new` would rightly keep it.
+            let off = libc::stack_t {
+                ss_sp: core::ptr::null_mut(),
+                ss_flags: libc::SS_DISABLE,
+                ss_size: 0,
+            };
+            // SAFETY: disables this thread's alternate signal stack.
+            assert_eq!(unsafe { libc::sigaltstack(&off, core::ptr::null_mut()) }, 0);
+            let s = SignalStack::new().expect("a thread without a signal stack gets one");
             // SAFETY: sigaltstack(2) queries into a zeroed stack_t.
             let mut cur: libc::stack_t = unsafe { core::mem::zeroed() };
             assert_eq!(unsafe { libc::sigaltstack(core::ptr::null(), &mut cur) }, 0);
