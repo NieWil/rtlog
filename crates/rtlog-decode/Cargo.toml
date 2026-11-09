@@ -25,6 +25,10 @@ criterion = { version = "0.5", default-features = false, features = ["cargo_benc
 [[bin]]
 name = "rtlog"
 path = "src/bin/rtlog.rs"
+# The CLI has no API to document, and its docs would go to target/doc/rtlog/,
+# the same directory as the rtlog library's: cargo documents both in parallel
+# and they race (cargo issue 6313), which failed `cargo doc` in CI.
+doc = false
 
 [[bench]]
 name = "decode"
