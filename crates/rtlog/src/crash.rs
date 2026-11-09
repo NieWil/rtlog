@@ -171,9 +171,13 @@ impl Drop for SignalStack {
                 let off = libc::stack_t {
                     ss_sp: core::ptr::null_mut(),
                     ss_flags: libc::SS_DISABLE,
-                    ss_size: 0,
+                    // macOS refuses SS_DISABLE (ENOMEM) when ss_size is below
+                    // MINSIGSTKSZ, although the size is otherwise ignored.
+                    ss_size: SIGNAL_STACK,
                 };
-                libc::sigaltstack(&off, core::ptr::null_mut());
+                if libc::sigaltstack(&off, core::ptr::null_mut()) != 0 {
+                    return; // still installed: leak rather than unmap it
+                }
             }
             libc::munmap(self.base, self.len);
         }
@@ -809,7 +813,7 @@ mod tests {
             let off = libc::stack_t {
                 ss_sp: core::ptr::null_mut(),
                 ss_flags: libc::SS_DISABLE,
-                ss_size: 0,
+                ss_size: SIGNAL_STACK, // macOS: ENOMEM below MINSIGSTKSZ even here
             };
             // SAFETY: disables this thread's alternate signal stack.
             assert_eq!(unsafe { libc::sigaltstack(&off, core::ptr::null_mut()) }, 0);
