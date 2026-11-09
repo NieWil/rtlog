@@ -11,7 +11,7 @@ keywords = ["logging", "decoder", "embedded", "real-time", "deferred"]
 categories = ["development-tools::debugging", "command-line-utilities", "embedded"]
 
 [dependencies]
-rtlog = { version = "=0.2.3", path = "../rtlog" }
+rtlog = { version = "=0.2.4", path = "../rtlog" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 object = { version = "0.36", default-features = false, features = ["read_core", "elf", "std"] }
