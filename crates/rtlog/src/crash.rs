@@ -32,20 +32,22 @@
 //! exit status shows the signal). On a panic the previous panic hook runs
 //! after the dump, and logging keeps working.
 //!
-//! The handler runs on its own alternate signal stack of [`SIGNAL_STACK`]
-//! bytes, with a guard page below it. [`install`] sets one up for the calling
-//! thread, and every thread gets one when it first logs after that. The
-//! default one Rust gives a thread is `max(SIGSTKSZ, AT_MINSIGSTKSZ)`, often
-//! 8 KiB, and the CPU's saved state takes up to a few KiB of it: too little
-//! for the dump in a debug build. A thread that never logs keeps its default
-//! stack.
+//! The fatal dump runs on its own stack of [`SIGNAL_STACK`] bytes with a guard
+//! page below it, mapped by [`install`]: the handler claims the dump on the
+//! crashing thread's signal stack, then switches to the dump stack (x86-64 and
+//! aarch64), so the dump does not depend on which thread crashed. The default
+//! signal stack Rust gives a thread is `max(SIGSTKSZ, AT_MINSIGSTKSZ)`, often
+//! 8 KiB, and the CPU's saved state takes up to a few KiB of it: too little for
+//! a debug build's dump. On other architectures the dump runs on the signal
+//! stack, which [`install`] enlarges to [`SIGNAL_STACK`] for the calling thread
+//! and every thread that logs after it.
 
 use std::cell::OnceCell;
 use std::ffi::CString;
 use std::io;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, TryLockError};
 
 use crate::ring::FRAME_MAX;
@@ -206,6 +208,7 @@ pub fn install(dir: impl AsRef<Path>) -> io::Result<()> {
         ));
     }
     HEADER.get_or_init(|| Header::new(crate::site::contract_hash(), crate::clock::hz()).encode());
+    map_dump_stack();
     prepare_thread();
 
     let previous = std::panic::take_hook();
@@ -246,6 +249,112 @@ pub fn dumps() -> u32 {
     WRITTEN.load(Ordering::Acquire)
 }
 
+/// Arguments of the fatal signal dump, passed to [`signal_dump`] through a pointer.
+struct SignalDump {
+    sig: i32,
+    code: i32,
+    addr: u64,
+    pc: u64,
+}
+
+/// The fatal signal dump, called on the dump stack by [`on_dump_stack`].
+extern "C" fn signal_dump(arg: *mut libc::c_void) {
+    // SAFETY: `on_signal` passes a pointer to a live `SignalDump`.
+    let a = unsafe { &*(arg as *const SignalDump) };
+    dump_body(
+        wire::CRASH_SIGNAL,
+        a.sig,
+        a.code,
+        a.addr,
+        a.pc,
+        signal_name(a.sig),
+        true,
+    );
+}
+
+/// Top of the dump stack: [`SIGNAL_STACK`] bytes with a guard page below,
+/// mapped by [`install`]. Null when it could not be mapped.
+static DUMP_STACK_TOP: AtomicPtr<u8> = AtomicPtr::new(core::ptr::null_mut());
+
+/// Map the dump stack once. A fatal dump runs on it whatever stack the
+/// crashing thread has: a thread that never logged still has the small
+/// default signal stack, too small for a debug build's dump.
+fn map_dump_stack() {
+    if !DUMP_STACK_TOP.load(Ordering::Acquire).is_null() {
+        return;
+    }
+    // SAFETY: plain mmap/mprotect on memory this function owns; it is never unmapped.
+    unsafe {
+        let page = match libc::sysconf(libc::_SC_PAGESIZE) {
+            n if n > 0 => n as usize,
+            _ => 4096,
+        };
+        let len = SIGNAL_STACK + page;
+        let base = libc::mmap(
+            core::ptr::null_mut(),
+            len,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_PRIVATE | libc::MAP_ANON,
+            -1,
+            0,
+        );
+        if base == libc::MAP_FAILED {
+            return;
+        }
+        if libc::mprotect(base, page, libc::PROT_NONE) != 0 {
+            libc::munmap(base, len);
+            return;
+        }
+        // mmap returns page-aligned memory, so the top is 16-byte aligned.
+        DUMP_STACK_TOP.store(base.cast::<u8>().add(len), Ordering::Release);
+    }
+}
+
+/// Call `f(arg)` on the dump stack, or on the current stack where it is not
+/// mapped or the architecture has no stack switch here (then the per-thread
+/// signal stack from [`prepare_thread`] is what the dump runs on).
+///
+/// # Safety
+///
+/// One caller at a time (the thread that won [`claim_fatal`]); `f` must not
+/// unwind.
+unsafe fn on_dump_stack(f: extern "C" fn(*mut libc::c_void), arg: *mut libc::c_void) {
+    let top = DUMP_STACK_TOP.load(Ordering::Acquire);
+    if top.is_null() {
+        f(arg);
+        return;
+    }
+    #[cfg(target_arch = "x86_64")]
+    // SAFETY: `top` is the 16-byte-aligned end of a mapped, unused stack; the
+    // old stack pointer is kept in callee-saved r12 across the call.
+    core::arch::asm!(
+        "mov r12, rsp",
+        "mov rsp, {top}",
+        "call {f}",
+        "mov rsp, r12",
+        top = in(reg) top,
+        f = in(reg) f,
+        in("rdi") arg,
+        out("r12") _,
+        clobber_abi("C"),
+    );
+    #[cfg(target_arch = "aarch64")]
+    // SAFETY: as above; the old stack pointer is kept in callee-saved x20.
+    core::arch::asm!(
+        "mov x20, sp",
+        "mov sp, {top}",
+        "blr {f}",
+        "mov sp, x20",
+        top = in(reg) top,
+        f = in(reg) f,
+        in("x0") arg,
+        out("x20") _,
+        clobber_abi("C"),
+    );
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    f(arg);
+}
+
 extern "C" fn on_signal(sig: i32, info: *mut libc::siginfo_t, uctx: *mut libc::c_void) {
     // SAFETY: the kernel passes a valid siginfo for SA_SIGINFO handlers.
     let (addr, code) = unsafe {
@@ -255,15 +364,17 @@ extern "C" fn on_signal(sig: i32, info: *mut libc::siginfo_t, uctx: *mut libc::c
             (fault_addr(info), (*info).si_code)
         }
     };
-    dump(
-        wire::CRASH_SIGNAL,
-        sig,
-        code,
-        addr,
-        pc_of(uctx),
-        signal_name(sig),
-        true,
-    );
+    if claim_fatal() {
+        let mut args = SignalDump {
+            sig,
+            code,
+            addr,
+            pc: pc_of(uctx),
+        };
+        // SAFETY: only the thread that claimed the fatal dump gets here, so the
+        // dump stack has one user; `args` outlives the call.
+        unsafe { on_dump_stack(signal_dump, (&mut args as *mut SignalDump).cast()) };
+    }
     // Restore the default action and re-raise to get it (core dump, exit status
     // that names the signal). The signal is blocked while this handler runs, so
     // it stays pending and takes effect when the handler returns.
@@ -486,17 +597,30 @@ fn dump_ring(fd: i32, shared: &Shared, scratch: &mut [u8; FRAME_MAX]) {
 
 fn dump(kind: u8, sig: i32, code: i32, addr: u64, pc: u64, msg: &str, fatal: bool) {
     if fatal {
-        if FATAL.swap(true, Ordering::AcqRel) {
-            // Another thread (or this one, inside its own handler) is already
-            // dumping: let it finish before the default action ends the process.
-            wait_for_dump();
+        if !claim_fatal() {
             return;
         }
-        crate::level::set_off(); // freeze: later log calls are no-ops
     } else if FATAL.load(Ordering::Acquire) || SOFT.fetch_add(1, Ordering::AcqRel) >= MAX_SOFT_DUMPS
     {
         return;
     }
+    dump_body(kind, sig, code, addr, pc, msg, fatal);
+}
+
+/// Claim the one fatal dump of the process. `false` when another thread (or
+/// this one, inside its own handler) already has it: this waits for that dump
+/// to finish first, so the default action does not end the process under it.
+fn claim_fatal() -> bool {
+    if FATAL.swap(true, Ordering::AcqRel) {
+        wait_for_dump();
+        return false;
+    }
+    crate::level::set_off(); // freeze: later log calls are no-ops
+    true
+}
+
+/// Write one dump. Fatal dumps call this only after [`claim_fatal`].
+fn dump_body(kind: u8, sig: i32, code: i32, addr: u64, pc: u64, msg: &str, fatal: bool) {
     let (Some(prefix), Some(header)) = (PREFIX.get(), HEADER.get()) else {
         return;
     };

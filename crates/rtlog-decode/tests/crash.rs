@@ -84,6 +84,17 @@ fn crash_child() {
             // A fatal signal is still dumped.
             unsafe { core::ptr::write_volatile(black_box(core::ptr::null_mut::<u32>()), 1) }
         }
+        "quiet" => {
+            // A thread that never logged faults: it has only the small
+            // default signal stack (8 KiB here, what Rust gives a thread on
+            // x86-64 CPUs without AMX), never the one rtlog sets up.
+            std::thread::spawn(|| {
+                small_signal_stack();
+                unsafe { core::ptr::write_volatile(black_box(core::ptr::null_mut::<u32>()), 3) }
+            })
+            .join()
+            .unwrap();
+        }
         "two" => {
             // Two threads fault at the same moment: the first one's dump must
             // be complete, the second must wait for it, not kill the process.
@@ -470,6 +481,16 @@ fn a_small_default_signal_stack_still_gives_a_complete_dump() {
     let (status, json, text, diag) = run_child("smallstack");
     assert_eq!(status.signal(), Some(libc::SIGABRT), "{status:?}\n{diag}");
     check_dump(&json, &text, &diag);
+}
+
+/// A thread that never logged, with only a small default signal stack, faults:
+/// the dump runs on rtlog's own dump stack and is complete. Before, a debug
+/// build overflowed the small stack and wrote only the stream header.
+#[test]
+fn a_thread_that_never_logged_still_gives_a_complete_dump() {
+    let (status, json, text, diag) = run_child("quiet");
+    assert_eq!(status.signal(), Some(libc::SIGSEGV), "{status:?}\n{diag}");
+    check_dump_on(&json, &text, None, &diag);
 }
 
 /// The realistic case: a drain is running and stuck in a transport write
