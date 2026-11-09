@@ -149,16 +149,18 @@ type Diag = String;
 /// Give the calling thread an 8 KiB alternate signal stack with a guard page
 /// below it: what Rust's std gives every thread on CPUs whose
 /// `AT_MINSIGSTKSZ` is under 8 KiB (most x86-64 without AMX). On such a stack
-/// the dump of a debug build used to overflow into the guard page.
+/// the dump of a debug build used to overflow into the guard page. Where the
+/// system minimum is larger (32 KiB on macOS), that minimum: still below
+/// `SIGNAL_STACK`, so `install` must replace it.
 fn small_signal_stack() {
-    const SIZE: usize = 8192;
+    let size = libc::MINSIGSTKSZ.max(8192);
     // SAFETY: plain mmap/mprotect/sigaltstack on memory this function owns and
     // leaks for the rest of the (short-lived) child process.
     unsafe {
-        let page = 4096;
+        let page = libc::sysconf(libc::_SC_PAGESIZE) as usize;
         let base = libc::mmap(
             core::ptr::null_mut(),
-            SIZE + page,
+            size + page,
             libc::PROT_READ | libc::PROT_WRITE,
             libc::MAP_PRIVATE | libc::MAP_ANON,
             -1,
@@ -169,9 +171,14 @@ fn small_signal_stack() {
         let st = libc::stack_t {
             ss_sp: base.cast::<u8>().add(page).cast(),
             ss_flags: 0,
-            ss_size: SIZE,
+            ss_size: size,
         };
-        assert_eq!(libc::sigaltstack(&st, core::ptr::null_mut()), 0);
+        assert_eq!(
+            libc::sigaltstack(&st, core::ptr::null_mut()),
+            0,
+            "sigaltstack({size}): {}",
+            std::io::Error::last_os_error()
+        );
     }
 }
 
@@ -453,7 +460,8 @@ fn abort_is_logged() {
     assert_eq!(text.crash.unwrap().signal, libc::SIGABRT);
 }
 
-/// A thread whose default signal stack is only 8 KiB still gets a complete
+/// A thread whose default signal stack is only 8 KiB (or the system minimum)
+/// still gets a complete
 /// dump: `install` gives it a bigger one. Without that, a debug build
 /// overflowed the small stack, wrote only the stream header and died of
 /// SIGSEGV instead of the original signal.
