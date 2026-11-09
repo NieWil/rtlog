@@ -631,6 +631,122 @@ mod tests {
     }
 
     #[test]
+    fn default_ring_is_empty_and_reports_its_capacity() {
+        let ring = Ring::<128>::default();
+        assert_eq!(ring.capacity(), 128);
+        assert_eq!(
+            (ring.pending(), ring.drops(), ring.is_closed()),
+            (0, 0, false)
+        );
+        assert!(ring.split(1).is_some());
+        assert!(ring.split(1).is_none(), "only one split");
+    }
+
+    #[test]
+    fn producer_and_consumer_share_the_ring() {
+        let ring = Ring::<128>::new();
+        let (mut p, c) = ring.split(5).unwrap();
+        assert!(core::ptr::eq(p.ring(), &ring));
+        assert!(core::ptr::eq(c.ring(), &ring));
+        p.count_drop();
+        p.count_drop();
+        assert_eq!(ring.drops(), 2);
+        assert_eq!(ring.take_drops(), 2);
+        assert_eq!(ring.drops(), 0);
+    }
+
+    #[test]
+    fn a_span_whose_open_frame_is_dropped_is_inert() {
+        let ring = Ring::<64>::new();
+        let (mut p, mut c) = ring.split(2).unwrap();
+        let outer = p.span_enter(9);
+        assert_ne!(outer.id, 0);
+        // Fill the ring; the next open frame cannot fit.
+        while p.push_at(1, 0, &[0; 8]) {}
+        let drops = ring.drops();
+        let inner = p.span_enter(9);
+        assert_eq!(
+            inner,
+            SpanId {
+                id: 0,
+                parent: outer.id
+            }
+        );
+        assert_eq!(ring.drops(), drops + 1);
+        // Closing the inert span writes nothing and keeps `outer` current.
+        let mut out = [0u8; FRAME_MAX];
+        while c.pop(&mut out).is_some() {}
+        p.span_exit(inner);
+        assert!(c.pop(&mut out).is_none());
+        let next = p.span_enter(9);
+        assert_eq!(next.parent, outer.id);
+    }
+
+    fn frames_seen_by_scan<const N: usize>(ring: &Ring<N>, max: usize) -> usize {
+        let mut scratch = [0u8; FRAME_MAX];
+        let mut seen = 0;
+        // SAFETY: single-threaded test; nothing consumes during the scan.
+        unsafe {
+            ring.scan(&mut scratch, |_| {
+                seen += 1;
+                seen < max
+            })
+        };
+        seen
+    }
+
+    #[test]
+    fn scan_reads_without_consuming_and_stops_when_asked() {
+        let ring = Ring::<256>::new();
+        let (mut p, _c) = ring.split(1).unwrap();
+        for i in 0..5 {
+            assert!(p.push_at(i, u64::from(i), &[i as u8]));
+        }
+        let pending = ring.pending();
+        assert_eq!(frames_seen_by_scan(&ring, usize::MAX), 5);
+        assert_eq!(
+            frames_seen_by_scan(&ring, 2),
+            2,
+            "stops when `f` returns false"
+        );
+        assert_eq!(ring.pending(), pending, "scan consumes nothing");
+    }
+
+    #[test]
+    fn scan_stops_when_the_consumer_passes_the_frame_it_read() {
+        let ring = Ring::<256>::new();
+        let (mut p, mut c) = ring.split(1).unwrap();
+        for i in 0..3 {
+            assert!(p.push_at(i, 0, &[i as u8; 4]));
+        }
+        let mut scratch = [0u8; FRAME_MAX];
+        let mut seen = [0u8; 4];
+        let mut n_seen = 0;
+        // SAFETY: single-threaded test. The callback plays a drain that
+        // consumed the first two frames while the dump read the first.
+        unsafe {
+            ring.scan(&mut scratch, |f| {
+                seen[n_seen] = f[0];
+                n_seen += 1;
+                if n_seen == 1 {
+                    let mut out = [0u8; FRAME_MAX];
+                    let a = ring.peek_raw(&mut out).unwrap();
+                    ring.commit_raw(a);
+                    let b = ring.peek_raw(&mut out).unwrap();
+                    ring.commit_raw(b);
+                }
+                true
+            })
+        };
+        // Frame 0 was read before the consumer moved; frame 1's start is then
+        // behind `tail`, so the scan stops instead of handing it out.
+        assert_eq!(&seen[..n_seen], &[0]);
+        let mut out = [0u8; FRAME_MAX];
+        let n = c.pop(&mut out).unwrap();
+        assert_eq!(out[..n][0], 2);
+    }
+
+    #[test]
     fn emit_overflow_counts_a_drop() {
         let ring = Ring::<1024>::new();
         let (_p, _c) = ring.split(1).unwrap();

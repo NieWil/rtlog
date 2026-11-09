@@ -253,6 +253,99 @@ mod tests {
         assert_eq!(frame_delta(&f[..3]), 0);
     }
 
+    /// Counts flushes so a test can see `flush` reach the inner transport.
+    struct Flushes<'a> {
+        inner: SliceTransport<'a>,
+        flushed: usize,
+    }
+
+    impl Transport for Flushes<'_> {
+        fn write(&mut self, frame: &[u8]) -> Result<(), Full> {
+            self.inner.write(frame)
+        }
+        fn flush(&mut self) {
+            self.flushed += 1;
+        }
+    }
+
+    #[test]
+    fn a_mutable_reference_forwards_writes_and_flushes() {
+        let mut buf = [0u8; 8];
+        let mut inner = Flushes {
+            inner: SliceTransport::new(&mut buf),
+            flushed: 0,
+        };
+        {
+            let mut t = &mut inner;
+            write_ctx_close(&mut t, 3).unwrap();
+            assert_eq!(write_dropped(&mut t, 3, 9), Err(Full), "9 bytes > 3 left");
+            Transport::flush(&mut t);
+        }
+        assert_eq!(inner.flushed, 1);
+        let mut want = wire::CTRL_CTX_CLOSE.to_le_bytes().to_vec();
+        want.push(3);
+        assert_eq!(inner.inner.written(), &want[..]);
+    }
+
+    #[test]
+    fn vec_and_io_transports_take_every_frame() {
+        let mut v: std::vec::Vec<u8> = std::vec::Vec::new();
+        write_ctx_time(&mut v, 1, 0x0102).unwrap();
+        assert_eq!(&v[..4], &wire::CTRL_CTX_TIME.to_le_bytes());
+        assert_eq!(&v[4..], &[1, 2, 1, 0, 0, 0, 0, 0, 0]);
+
+        let mut io = IoTransport(std::vec::Vec::new());
+        io.write(&[1, 2, 3]).unwrap();
+        io.write(&[4]).unwrap();
+        io.flush();
+        assert_eq!(io.0, [1, 2, 3, 4]);
+    }
+
+    /// A writer that fails every write and flush, like a closed socket.
+    struct Broken {
+        flushes: usize,
+    }
+
+    impl std::io::Write for Broken {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::ErrorKind::BrokenPipe.into())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.flushes += 1;
+            Err(std::io::ErrorKind::BrokenPipe.into())
+        }
+    }
+
+    #[test]
+    fn an_io_error_is_reported_as_full_and_a_failed_flush_is_ignored() {
+        let mut t = IoTransport(Broken { flushes: 0 });
+        assert_eq!(t.write(&[1]), Err(Full));
+        t.flush();
+        assert_eq!(t.0.flushes, 1);
+
+        // A drain pass into it keeps the frame in the ring.
+        let ring = Ring::<128>::new();
+        let (mut p, mut c) = ring.split(1).unwrap();
+        assert!(p.push_at(1, 0, &[5]));
+        let mut scratch = [0u8; FRAME_MAX];
+        assert_eq!(
+            drain_ring(&mut c, &mut t, &mut scratch),
+            PassStats::default()
+        );
+        assert!(ring.pending() > 0);
+    }
+
+    #[test]
+    fn a_long_context_name_is_capped() {
+        let mut buf = [0u8; 256];
+        let mut t = SliceTransport::new(&mut buf);
+        let name = "n".repeat(200);
+        write_ctx_register(&mut t, 1, &name).unwrap();
+        let w = t.written();
+        assert_eq!(w[5] as usize, crate::arg::DYN_CAP);
+        assert_eq!(w.len(), 4 + 1 + 1 + crate::arg::DYN_CAP);
+    }
+
     #[test]
     fn ctx_register_frame_layout() {
         let mut buf = [0u8; 64];

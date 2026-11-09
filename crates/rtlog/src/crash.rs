@@ -718,3 +718,458 @@ fn dump_body(kind: u8, sig: i32, code: i32, addr: u64, pc: u64, msg: &str, fatal
         DUMP_DONE.store(true, Ordering::Release);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn every_handled_signal_has_a_name() {
+        assert_eq!(signal_name(libc::SIGSEGV), "SIGSEGV: invalid memory access");
+        assert_eq!(signal_name(libc::SIGBUS), "SIGBUS: bus error");
+        assert!(signal_name(libc::SIGFPE).starts_with("SIGFPE: "));
+        assert_eq!(signal_name(libc::SIGILL), "SIGILL: illegal instruction");
+        assert_eq!(signal_name(libc::SIGABRT), "SIGABRT: abort");
+        assert_eq!(signal_name(libc::SIGUSR1), "signal");
+    }
+
+    #[test]
+    fn no_context_means_no_pc() {
+        assert_eq!(pc_of(core::ptr::null_mut()), 0);
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn pc_is_read_from_the_saved_context() {
+        // SAFETY: a zeroed ucontext_t is a valid value.
+        let mut uc: libc::ucontext_t = unsafe { core::mem::zeroed() };
+        uc.uc_mcontext.gregs[libc::REG_RIP as usize] = 0x1234_5678;
+        assert_eq!(
+            pc_of((&mut uc as *mut libc::ucontext_t).cast()),
+            0x1234_5678
+        );
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+    #[test]
+    fn pc_is_read_from_the_saved_context() {
+        // SAFETY: a zeroed ucontext_t is a valid value.
+        let mut uc: libc::ucontext_t = unsafe { core::mem::zeroed() };
+        uc.uc_mcontext.pc = 0x1234_5678;
+        assert_eq!(
+            pc_of((&mut uc as *mut libc::ucontext_t).cast()),
+            0x1234_5678
+        );
+    }
+
+    #[test]
+    fn try_lock_for_gives_up_on_a_held_lock_and_takes_a_poisoned_one() {
+        static M: Mutex<u32> = Mutex::new(7);
+        assert_eq!(try_lock_for(&M, 1).map(|g| *g), Some(7));
+        let held = M.lock().unwrap();
+        assert!(try_lock_for(&M, 100).is_none());
+        drop(held);
+        let _ = std::thread::spawn(|| {
+            let _g = M.lock().unwrap();
+            panic!("poison the lock");
+        })
+        .join();
+        assert!(M.is_poisoned());
+        assert_eq!(try_lock_for(&M, 1).map(|g| *g), Some(7));
+    }
+
+    #[test]
+    fn write_all_writes_everything_and_stops_on_an_error() {
+        let mut fds = [0i32; 2];
+        // SAFETY: pipe(2) fills the two descriptors.
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+        write_all(fds[1], b"hello");
+        let mut buf = [0u8; 8];
+        // SAFETY: `buf` is valid for its length.
+        let n = unsafe { libc::read(fds[0], buf.as_mut_ptr().cast(), buf.len()) };
+        assert_eq!(&buf[..n as usize], b"hello");
+        // SAFETY: closing the descriptors pipe(2) gave us.
+        unsafe {
+            libc::close(fds[0]);
+            libc::close(fds[1]);
+        }
+        // An invalid descriptor: it returns instead of retrying forever.
+        write_all(-1, b"lost");
+        assert_eq!(io::Error::last_os_error().raw_os_error(), Some(libc::EBADF));
+    }
+
+    #[test]
+    fn a_thread_gets_one_signal_stack_and_loses_it_on_drop() {
+        std::thread::spawn(|| {
+            let s = SignalStack::new().expect("a new thread has a small signal stack or none");
+            // SAFETY: sigaltstack(2) queries into a zeroed stack_t.
+            let mut cur: libc::stack_t = unsafe { core::mem::zeroed() };
+            assert_eq!(unsafe { libc::sigaltstack(core::ptr::null(), &mut cur) }, 0);
+            assert_eq!((cur.ss_sp, cur.ss_size), (s.sp, SIGNAL_STACK));
+            assert!(SignalStack::new().is_none(), "a large enough stack is kept");
+            drop(s);
+            assert_eq!(unsafe { libc::sigaltstack(core::ptr::null(), &mut cur) }, 0);
+            assert_ne!(
+                cur.ss_flags & libc::SS_DISABLE,
+                0,
+                "disabled before unmapping"
+            );
+        })
+        .join()
+        .unwrap();
+    }
+
+    extern "C" fn record_stack_address(arg: *mut libc::c_void) {
+        let local = 0u8;
+        // SAFETY: the caller passes a pointer to a live usize.
+        unsafe { *(arg as *mut usize) = core::hint::black_box(&local) as *const u8 as usize };
+    }
+
+    #[test]
+    fn the_dump_runs_on_its_own_stack_once_it_is_mapped() {
+        // Nothing else in this test binary maps the dump stack (`install`
+        // runs only in child processes).
+        assert!(DUMP_STACK_TOP.load(Ordering::Acquire).is_null());
+        let marker = core::hint::black_box(0u8);
+        let here = core::hint::black_box(&marker) as *const u8 as usize;
+        let mut seen = 0usize;
+        // SAFETY: one caller; `record_stack_address` does not unwind.
+        unsafe { on_dump_stack(record_stack_address, (&mut seen as *mut usize).cast()) };
+        assert!(
+            here.abs_diff(seen) < 64 * 1024,
+            "unmapped: runs on this stack"
+        );
+
+        map_dump_stack();
+        let top = DUMP_STACK_TOP.load(Ordering::Acquire);
+        assert!(!top.is_null());
+        map_dump_stack();
+        assert_eq!(DUMP_STACK_TOP.load(Ordering::Acquire), top, "mapped once");
+        // SAFETY: as above.
+        unsafe { on_dump_stack(record_stack_address, (&mut seen as *mut usize).cast()) };
+        let top = top as usize;
+        #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+        assert!(
+            (top - SIGNAL_STACK..top).contains(&seen),
+            "{seen:#x} not in the dump stack below {top:#x}"
+        );
+        #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+        assert!(here.abs_diff(seen) < 64 * 1024, "no stack switch here");
+    }
+
+    // Child processes: `install` and the fatal path are process-wide.
+
+    const CHILD_ENV: &str = "RTLOG_CRASH_UNIT_CHILD";
+    const DIR_ENV: &str = "RTLOG_CRASH_UNIT_DIR";
+
+    /// The crash record at the end of a dump.
+    #[derive(Debug, PartialEq)]
+    struct Record {
+        ctx: u64,
+        kind: u8,
+        sig: i32,
+        code: i32,
+        addr: u64,
+        pc: u64,
+        msg: Vec<u8>,
+    }
+
+    fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
+        hay.windows(needle.len()).rposition(|w| w == needle)
+    }
+
+    fn count(hay: &[u8], needle: &[u8]) -> usize {
+        hay.windows(needle.len()).filter(|w| *w == needle).count()
+    }
+
+    fn crash_record(b: &[u8]) -> Record {
+        let at = find(b, &wire::CTRL_CRASH.to_le_bytes()).expect("a crash record");
+        let mut p = at + 4;
+        let (_, n) = varint::decode(&b[p..]).unwrap();
+        p += n;
+        let (ctx, n) = varint::decode(&b[p..]).unwrap();
+        p += n;
+        let le4 = |p: usize| i32::from_le_bytes(b[p..p + 4].try_into().unwrap());
+        let le8 = |p: usize| u64::from_le_bytes(b[p..p + 8].try_into().unwrap());
+        let len = b[p + 25];
+        let r = Record {
+            ctx,
+            kind: b[p],
+            sig: le4(p + 1),
+            code: le4(p + 5),
+            addr: le8(p + 9),
+            pc: le8(p + 17),
+            msg: b[p + 26..].to_vec(),
+        };
+        assert_eq!(
+            r.msg.len(),
+            usize::from(len & 0x7f),
+            "the record ends the file"
+        );
+        r
+    }
+
+    /// Dump files in `dir`, lowest number first.
+    fn dumps_in(dir: &Path) -> Vec<Vec<u8>> {
+        let mut files: Vec<(u32, PathBuf)> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| {
+                let p = e.unwrap().path();
+                let name = p.file_stem().unwrap().to_string_lossy().into_owned();
+                (name.rsplit('-').next().unwrap().parse().unwrap(), p)
+            })
+            .collect();
+        files.sort();
+        files
+            .iter()
+            .map(|(_, p)| std::fs::read(p).unwrap())
+            .collect()
+    }
+
+    fn site_id_of(fmt: &str) -> [u8; 4] {
+        let s = crate::site::sites().iter().find(|s| s.fmt == fmt).unwrap();
+        s.id.to_le_bytes()
+    }
+
+    /// The child half: runs only when a parent test below sets `CHILD_ENV`.
+    #[test]
+    fn unit_child() {
+        let Ok(mode) = std::env::var(CHILD_ENV) else {
+            return;
+        };
+        let dir = PathBuf::from(std::env::var(DIR_ENV).unwrap());
+        match mode.as_str() {
+            "fatal" => child_fatal(&dir),
+            "nodir" => child_nodir(&dir),
+            "exhausted" => child_exhausted(&dir),
+            "locks" => child_locks(&dir),
+            m => panic!("unknown mode {m}"),
+        }
+    }
+
+    /// The fatal path of `on_signal` without the signal: claim, dump on the
+    /// dump stack, and a second thread that waits for the dump to finish.
+    fn child_fatal(dir: &Path) {
+        install(dir).unwrap();
+        for i in 0..10u32 {
+            crate::info!("fatal child i={}", i);
+        }
+        assert!(claim_fatal());
+        assert_eq!(crate::level::level(), None, "logging is frozen");
+        static STARTED: AtomicBool = AtomicBool::new(false);
+        let waiter = std::thread::spawn(|| {
+            STARTED.store(true, Ordering::Release);
+            let t = Instant::now();
+            (claim_fatal(), t.elapsed())
+        });
+        while !STARTED.load(Ordering::Acquire) {
+            std::thread::yield_now();
+        }
+        std::thread::sleep(Duration::from_millis(30));
+        assert!(
+            !waiter.is_finished(),
+            "the second claimant waits for the dump"
+        );
+        let mut args = SignalDump {
+            sig: libc::SIGSEGV,
+            code: 1,
+            addr: 0xdead,
+            pc: 0xbeef,
+        };
+        // SAFETY: this thread claimed the fatal dump; `args` outlives the call.
+        unsafe { on_dump_stack(signal_dump, (&mut args as *mut SignalDump).cast()) };
+        let (second, waited) = waiter.join().unwrap();
+        assert!(!second, "the second claimant does not dump");
+        assert!(
+            waited < Duration::from_secs(2),
+            "released by the dump, not the timeout"
+        );
+        assert!(DUMP_DONE.load(Ordering::Acquire));
+        assert_eq!(dumps(), 1);
+
+        // Later fatal and soft dumps are skipped.
+        dump(wire::CRASH_SIGNAL, libc::SIGBUS, 0, 0, 0, "again", true);
+        snapshot("after the fatal dump");
+        assert_eq!(dumps(), 1);
+
+        let files = dumps_in(dir);
+        assert_eq!(files.len(), 1);
+        let b = &files[0];
+        assert_eq!(&b[..HEADER_LEN], HEADER.get().unwrap());
+        assert_eq!(count(b, &site_id_of("fatal child i={}")), 10, "every frame");
+        let msg = signal_name(libc::SIGSEGV).as_bytes();
+        let r = crash_record(b);
+        assert_eq!(
+            (r.kind, r.sig, r.code, r.addr, r.pc, r.msg.as_slice()),
+            (wire::CRASH_SIGNAL, libc::SIGSEGV, 1, 0xdead, 0xbeef, msg)
+        );
+        assert_ne!(r.ctx, 0, "on the crashing thread's context");
+    }
+
+    /// The dump directory disappeared: no dump, and no hang.
+    fn child_nodir(dir: &Path) {
+        install(dir).unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
+        snapshot("nowhere to go");
+        assert_eq!(dumps(), 0);
+        assert!(claim_fatal());
+        let mut args = SignalDump {
+            sig: libc::SIGABRT,
+            code: 0,
+            addr: 0,
+            pc: 0,
+        };
+        signal_dump((&mut args as *mut SignalDump).cast());
+        assert!(DUMP_DONE.load(Ordering::Acquire), "waiters are released");
+        assert_eq!(dumps(), 0);
+        assert!(!dir.exists());
+    }
+
+    /// 1 000 names in a row are taken: give up rather than loop, and use the
+    /// next free number afterwards.
+    fn child_exhausted(dir: &Path) {
+        install(dir).unwrap();
+        let pid = std::process::id();
+        let first = NEXT.load(Ordering::Acquire);
+        for n in first..first + 1_000 {
+            std::fs::write(dir.join(std::format!("crash-{pid}-{n}.rtlog")), b"taken").unwrap();
+        }
+        snapshot("no free name");
+        assert_eq!(dumps(), 0);
+        assert_eq!(NEXT.load(Ordering::Acquire), first + 1_000);
+        snapshot("a free name again");
+        assert_eq!(dumps(), 1);
+        let new = dir.join(std::format!("crash-{pid}-{}.rtlog", first + 1_000));
+        let r = crash_record(&std::fs::read(new).unwrap());
+        assert_eq!(
+            (r.kind, r.msg.as_slice()),
+            (CRASH_SNAPSHOT, &b"a free name again"[..])
+        );
+        assert_eq!(std::fs::read_dir(dir).unwrap().count(), 1_001);
+    }
+
+    /// A busy name lock gives an empty name; a busy ring list gives a dump
+    /// with only the header and the crash record.
+    fn child_locks(dir: &Path) {
+        install(dir).unwrap();
+        std::thread::Builder::new()
+            .name("held".into())
+            .spawn(|| crate::info!("from held {}", 1u8))
+            .unwrap()
+            .join()
+            .unwrap();
+        crate::info!("from main {}", 2u8);
+        let held: Arc<Shared> = RINGS
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|s| *s.name.lock().unwrap() == "held")
+            .unwrap()
+            .clone();
+        {
+            let _name = held.name.lock().unwrap();
+            snapshot("name busy");
+        }
+        {
+            let _rings = RINGS.lock().unwrap();
+            snapshot("list busy");
+        }
+        assert_eq!(dumps(), 2);
+        let files = dumps_in(dir);
+
+        let mut empty_name = wire::CTRL_CTX_REGISTER.to_le_bytes().to_vec();
+        let mut ctx = [0u8; 5];
+        let n = varint::encode(u64::from(held.ring.ctx()), &mut ctx);
+        empty_name.extend_from_slice(&ctx[..n]);
+        empty_name.push(0);
+        assert!(
+            find(&files[0], &empty_name).is_some(),
+            "announced without a name"
+        );
+        assert!(find(&files[0], b"held").is_none());
+        assert_eq!(count(&files[0], &site_id_of("from held {}")), 1);
+
+        let b = &files[1];
+        assert_eq!(
+            &b[HEADER_LEN..HEADER_LEN + 4],
+            &wire::CTRL_CRASH.to_le_bytes()
+        );
+        assert_eq!(crash_record(b).msg, b"list busy");
+    }
+
+    /// Run `unit_child` in `mode` in a new process; returns its dump directory.
+    fn run_child(mode: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(std::format!(
+            "rtlog-crash-unit-{}-{mode}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let exe = std::env::current_exe().unwrap();
+        // Under a cross-architecture runner (QEMU), launch the child through it.
+        let runner = std::env::vars()
+            .find(|(k, v)| {
+                k.starts_with("CARGO_TARGET_") && k.ends_with("_RUNNER") && !v.trim().is_empty()
+            })
+            .map(|(_, v)| v);
+        let mut cmd = match &runner {
+            Some(r) => {
+                let mut parts = r.split_whitespace();
+                let mut c = std::process::Command::new(parts.next().unwrap());
+                c.args(parts).arg(&exe);
+                c
+            }
+            None => std::process::Command::new(&exe),
+        };
+        let out = cmd
+            .args([
+                "--exact",
+                "crash::tests::unit_child",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(CHILD_ENV, mode)
+            .env(DIR_ENV, &dir)
+            .env("RUST_BACKTRACE", "0")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            out.status.success(),
+            "child {mode}: {:?}\nstdout:\n{stdout}\nstderr:\n{}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(stdout.contains("1 passed"), "the child test ran:\n{stdout}");
+        dir
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[test]
+    fn a_fatal_dump_runs_once_and_a_second_claimant_waits_for_it() {
+        let dir = run_child("fatal");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[test]
+    fn a_missing_dump_directory_writes_nothing_and_does_not_hang() {
+        let dir = run_child("nodir");
+        assert!(!dir.exists());
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[test]
+    fn dump_names_are_tried_a_bounded_number_of_times() {
+        let dir = run_child("exhausted");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[test]
+    fn busy_locks_shorten_the_dump_instead_of_blocking_it() {
+        let dir = run_child("locks");
+        std::fs::remove_dir_all(dir).ok();
+    }
+}

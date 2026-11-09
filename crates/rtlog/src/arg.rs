@@ -432,6 +432,29 @@ mod tests {
     }
 
     #[test]
+    fn writer_starts_empty() {
+        let mut buf = [0u8; 4];
+        let mut w = Writer::new(&mut buf);
+        assert!(w.is_empty());
+        w.put_u8(1);
+        assert!(!w.is_empty());
+        assert_eq!(w.as_slice(), &[1]);
+    }
+
+    #[test]
+    fn long_byte_slices_are_truncated_and_flagged() {
+        let long = [7u8; 200];
+        let (b, n) = enc(&long[..]);
+        assert_eq!(b[0], Tag::Bytes as u8);
+        assert_eq!(b[1], DYN_CAP as u8 | TRUNCATED);
+        assert_eq!(n, 2 + DYN_CAP);
+        assert!(b[2..n].iter().all(|&x| x == 7));
+        // Exactly DYN_CAP bytes fit without the flag.
+        let (b, n) = enc(&long[..DYN_CAP]);
+        assert_eq!((b[1], n), (DYN_CAP as u8, 2 + DYN_CAP));
+    }
+
+    #[test]
     fn tag_roundtrip() {
         for v in 1..=16u8 {
             assert_eq!(Tag::from_u8(v).map(|t| t as u8), Some(v));

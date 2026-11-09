@@ -255,6 +255,58 @@ mod tests {
         assert_eq!((words[0], words[1]), (s.fmt.as_ptr() as usize, 4));
     }
 
+    /// `site_id` before the control-range fold.
+    fn raw_id(level: Level, module: &str, file: &str, line: u32, fmt: &str, nargs: u8) -> u32 {
+        let mut h = fnv1a32(module.as_bytes());
+        h = fnv1a_extend(h, b"|");
+        h = fnv1a_extend(h, file.as_bytes());
+        h = fnv1a_extend(h, b"|");
+        h = fnv1a_extend(h, &line.to_le_bytes());
+        h = fnv1a_extend(h, &1u32.to_le_bytes());
+        h = fnv1a_extend(h, b"|");
+        h = fnv1a_extend(h, fmt.as_bytes());
+        fnv1a_extend(h, &[level as u8, nargs])
+    }
+
+    #[test]
+    fn a_hash_in_the_control_range_is_moved_out_of_it() {
+        // Found by search: this site's raw FNV hash is >= CONTROL_BASE.
+        const LINE: u32 = 6_621_171;
+        let raw = raw_id(Level::Info, "m", "f.rs", LINE, "x", 0);
+        assert!(raw >= CONTROL_BASE, "{raw:#x}");
+        let id = site_id(Level::Info, "m", "f.rs", LINE, 1, "x", 0);
+        assert_eq!(id, raw ^ 0x8000_0000);
+        assert!(id < CONTROL_BASE);
+    }
+
+    #[test]
+    fn span_sites_describe_a_span() {
+        let s = Site::span("m", "f.rs", 12, 1, "parse");
+        assert_eq!(s.kind, SiteKind::Span);
+        assert_eq!((s.level, s.nargs, s.fmt), (Level::Info, 0, "parse"));
+        assert_eq!((s.module, s.file, s.line, s.column), ("m", "f.rs", 12, 1));
+        assert_eq!(
+            s.id,
+            site_id(Level::Info, "m", "f.rs", 12, 1, "parse", 0) ^ 0x5a5a_0000
+        );
+        // A span never shares the ID of a log site with the same text.
+        assert_ne!(
+            s.id,
+            Site::new(Level::Info, "m", "f.rs", 12, 1, "parse", 0).id
+        );
+    }
+
+    #[test]
+    fn a_span_id_in_the_control_range_is_moved_out_of_it() {
+        // Found by search: this span's salted ID lands in the control range.
+        const LINE: u32 = 1_526_560;
+        let salted = site_id(Level::Info, "m", "f.rs", LINE, 1, "span", 0) ^ 0x5a5a_0000;
+        assert!(salted >= CONTROL_BASE, "{salted:#x}");
+        let s = Site::span("m", "f.rs", LINE, 1, "span");
+        assert_eq!(s.id, salted ^ 0x8000_0000);
+        assert!(s.id < CONTROL_BASE);
+    }
+
     #[test]
     fn contract_hash_is_order_independent() {
         assert_eq!(contract_hash_of([1, 2, 3]), contract_hash_of([3, 1, 2]));
