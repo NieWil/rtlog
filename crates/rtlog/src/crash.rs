@@ -253,11 +253,22 @@ pub fn dumps() -> u32 {
     WRITTEN.load(Ordering::Acquire)
 }
 
+/// Mark the fatal dump finished, which lets a second faulting thread waiting
+/// in [`claim_fatal`] go on and end the process, so everything this thread
+/// must still write happens first.
+fn fatal_dump_done() {
+    write_coverage_profile();
+    DUMP_DONE.store(true, Ordering::Release);
+}
+
 /// In a coverage build (`cargo llvm-cov` sets `cfg(coverage)`), save this
 /// process's coverage counters now: a process killed by a signal never
 /// reaches the exit hook that normally writes them, so the crash tests' code
-/// would count as never run. Not async-signal-safe, which is acceptable in a
-/// coverage build only; normal builds compile this to nothing.
+/// would count as never run. Called before the fatal dump is marked done: a
+/// second faulting thread waiting for it would otherwise end the process in
+/// the middle of the write and leave a corrupt profile. Not
+/// async-signal-safe, which is acceptable in a coverage build only; normal
+/// builds compile this to nothing.
 fn write_coverage_profile() {
     #[cfg(coverage)]
     {
@@ -394,7 +405,6 @@ extern "C" fn on_signal(sig: i32, info: *mut libc::siginfo_t, uctx: *mut libc::c
         // SAFETY: only the thread that claimed the fatal dump gets here, so the
         // dump stack has one user; `args` outlives the call.
         unsafe { on_dump_stack(signal_dump, (&mut args as *mut SignalDump).cast()) };
-        write_coverage_profile();
     }
     // Restore the default action and re-raise to get it (core dump, exit status
     // that names the signal). The signal is blocked while this handler runs, so
@@ -647,7 +657,7 @@ fn dump_body(kind: u8, sig: i32, code: i32, addr: u64, pc: u64, msg: &str, fatal
     };
     let Some(fd) = open_dump(prefix.as_bytes()) else {
         if fatal {
-            DUMP_DONE.store(true, Ordering::Release);
+            fatal_dump_done();
         }
         return;
     };
@@ -719,7 +729,7 @@ fn dump_body(kind: u8, sig: i32, code: i32, addr: u64, pc: u64, msg: &str, fatal
     unsafe { libc::close(fd) };
     WRITTEN.fetch_add(1, Ordering::AcqRel);
     if fatal {
-        DUMP_DONE.store(true, Ordering::Release);
+        fatal_dump_done();
     }
 }
 
