@@ -187,7 +187,7 @@ fn json_line(
 /// lays descriptors out differently (another rtlog version) or the section is
 /// damaged; reading on would silently drop sites from the contract.
 fn whole_descriptors(bytes: &[u8], size: usize, section: &str) -> Result<(), ElfError> {
-    if bytes.len() % size == 0 {
+    if bytes.len().is_multiple_of(size) {
         return Ok(());
     }
     Err(ElfError::BadEntry {

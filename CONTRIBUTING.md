@@ -37,7 +37,7 @@ Every pull request runs these checks in CI, and all of them must pass before mer
 | Every public item documented, no broken doc links | `cargo doc` with `RUSTDOCFLAGS=-D warnings`, `#![warn(missing_docs)]` | crate roots |
 | Tests: Linux, macOS, Windows, QEMU (arm, aarch64, riscv64, i686) | `cargo test` | `.github/workflows/ci.yml` |
 | `no_std` builds for Cortex-M3, M4F/M7, M33 and RV32IMAC | `cargo build --no-default-features` | |
-| Line coverage at least 85 % | `cargo llvm-cov`, reported to [Codecov](https://codecov.io/gh/NieWil/rtlog) | `codecov.yml`, ci.yml |
+| Line coverage at least 97 % | `cargo llvm-cov`, reported to [Codecov](https://codecov.io/gh/NieWil/rtlog) | `codecov.yml`, ci.yml |
 | Memory safety of the unsafe ring code | Miri, AddressSanitizer, ThreadSanitizer | ci.yml |
 | Spec rules: real-time hot path, wire format, usability, size budgets | `scripts/spec_check.py` | `docs/spec.md` |
 | C/C++: build with `-Wall -Wextra -Werror`, end-to-end and crash tests | `scripts/c_e2e.sh` | |

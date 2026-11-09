@@ -28,7 +28,7 @@ cargo test --workspace
 cargo build -p rtlog --no-default-features --target thumbv7em-none-eabihf --release   # no_std
 python3 scripts/spec_check.py                                  # real-time, wire, usability rules
 scripts/c_e2e.sh gcc g++                                       # if c/ or the wire format changed
-cargo llvm-cov --workspace --summary-only                      # line coverage must stay >= 85 %
+cargo llvm-cov --workspace --summary-only                      # line coverage must stay >= 97 %
 cargo deny check && typos && actionlint && shellcheck scripts/*.sh scripts/demo/*.sh
 ```
 
