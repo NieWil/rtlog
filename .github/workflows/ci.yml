@@ -45,13 +45,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-deny,typos,actionlint,shellcheck
+          tool: cargo-deny,typos,shellcheck
       - name: Dependencies (advisories, licences, sources)
         run: cargo deny check
       - name: Spelling
         run: typos
       - name: Workflows
-        run: actionlint
+        # install-action has no actionlint; the PyPI package ships its binary.
+        run: pipx run --spec actionlint-py==1.7.12.25 actionlint
       - name: Shell scripts
         run: shellcheck scripts/*.sh scripts/demo/*.sh
       - name: Board results (format, and results/README.md up to date)
