@@ -5,6 +5,9 @@
 You write `println!`-style log lines. The device writes a few binary bytes into a lock-free ring: no formatting, no allocation, no lock. You read text, JSON or a [Perfetto](https://ui.perfetto.dev) timeline on the host.
 
 [![ci](https://github.com/NieWil/rtlog/actions/workflows/ci.yml/badge.svg)](https://github.com/NieWil/rtlog/actions/workflows/ci.yml)
+[![coverage](https://codecov.io/gh/NieWil/rtlog/graph/badge.svg)](https://codecov.io/gh/NieWil/rtlog)
+[![crates.io](https://img.shields.io/crates/v/rtlog.svg)](https://crates.io/crates/rtlog)
+[![docs.rs](https://img.shields.io/docsrs/rtlog)](https://docs.rs/rtlog)
 ![no_std](https://img.shields.io/badge/no__std-yes-2ea44f)
 ![languages](https://img.shields.io/badge/Rust%20%C2%B7%20C%20%C2%B7%20C%2B%2B%20%C2%B7%20Zephyr-informational)
 ![status](https://img.shields.io/badge/status-v0.2%20preview-orange)

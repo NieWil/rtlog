@@ -31,6 +31,37 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Docs build without warnings (incl. missing docs on public items)
+        run: cargo doc --workspace --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+  # Dependency, spelling, workflow, shell-script and C/C++ static checks. Each
+  # tool's config is in the repository root (deny.toml, _typos.toml,
+  # .clang-tidy); CONTRIBUTING.md says how to run them locally.
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny,typos,actionlint,shellcheck
+      - name: Dependencies (advisories, licences, sources)
+        run: cargo deny check
+      - name: Spelling
+        run: typos
+      - name: Workflows
+        run: actionlint
+      - name: Shell scripts
+        run: shellcheck scripts/*.sh scripts/demo/*.sh
+      - name: C/C++ header (clang-tidy)
+        run: |
+          sudo apt-get install -y -qq clang-tidy >/dev/null
+          clang-tidy --version
+          for f in c/examples/demo.c c/examples/crash.c; do
+            clang-tidy "$f" --quiet -- -std=gnu11 -pthread -I c/include
+          done
+          clang-tidy c/examples/demo.cpp --quiet -- -std=c++17 -pthread -I c/include
 
   test:
     strategy:
@@ -148,6 +179,9 @@ jobs:
 
   coverage:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # Codecov upload with GitHub's identity token, no secret
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -158,9 +192,12 @@ jobs:
         with:
           tool: cargo-llvm-cov
       - name: Run tests with coverage
-        run: cargo llvm-cov --workspace --lcov --output-path lcov.info
-      - name: Coverage summary
+        run: cargo llvm-cov --workspace --no-report
+      - name: Coverage report (fails below the minimum)
+        # Minimum line coverage. Raise it when coverage goes up; lowering it
+        # needs a reason in the PR.
         run: |
+          cargo llvm-cov report --lcov --output-path lcov.info
           {
             echo "## Unit test coverage"
             echo
@@ -168,7 +205,16 @@ jobs:
             cargo llvm-cov report --summary-only
             echo '```'
           } | tee -a "$GITHUB_STEP_SUMMARY"
+          cargo llvm-cov report --summary-only --fail-under-lines 85
+      - name: Upload to Codecov
+        if: always() && hashFiles('lcov.info') != ''
+        uses: codecov/codecov-action@v5
+        with:
+          files: lcov.info
+          use_oidc: true
+          fail_ci_if_error: false # a Codecov outage must not fail CI; the gate above does
       - uses: actions/upload-artifact@v4
+        if: always() && hashFiles('lcov.info') != ''
         with:
           name: coverage-lcov
           path: lcov.info
@@ -227,10 +273,10 @@ jobs:
         run: python3 scripts/size_report.py --out size.md
       - name: Check the spec's rules (real-time, wire, usability, memory; performance reported)
         run: |
-          size_arg=""
-          [ -f size.md ] && size_arg="--size size.md"
-          python3 scripts/spec_check.py --timing timing-1.md timing-2.md $size_arg | tee spec-check.md
-          exit ${PIPESTATUS[0]}
+          size_arg=()
+          [ -f size.md ] && size_arg=(--size size.md)
+          python3 scripts/spec_check.py --timing timing-1.md timing-2.md "${size_arg[@]}" | tee spec-check.md
+          exit "${PIPESTATUS[0]}"
       - if: always()
         run: cat spec-check.md >> "$GITHUB_STEP_SUMMARY"
 

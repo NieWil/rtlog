@@ -36,7 +36,8 @@ static pthread_barrier_t both;
 static void *faults_too(void *arg) {
     (void)arg;
     pthread_barrier_wait(&both);
-    *(volatile int *)0 = 2; /* SIGSEGV on a second thread, at the same moment */
+    /* SIGSEGV on a second thread, at the same moment: the crash under test. */
+    *(volatile int *)0 = 2; // NOLINT(clang-analyzer-core.NullDereference)
     return NULL;
 }
 

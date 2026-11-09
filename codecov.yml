@@ -1,0 +1,18 @@
+# Codecov settings. The hard minimum is enforced in CI (ci.yml, coverage job);
+# these statuses only flag a pull request that lowers coverage.
+coverage:
+  status:
+    project:
+      default:
+        target: auto   # compare with the base commit
+        threshold: 1%  # allow small noise
+    patch:
+      default:
+        target: 80%    # new and changed lines
+        informational: true
+comment:
+  layout: "condensed_header, diff, files"
+  require_changes: true
+ignore:
+  - "examples/**"
+  - "size/**"

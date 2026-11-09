@@ -551,7 +551,10 @@ rtlog_span_t rtlog_span_enter(const struct rtlog_site *site) {
     rtlog_span_t s = {0, 0};
     struct rtlog__ring *r;
     if (!__atomic_load_n(&rtlog__spans, __ATOMIC_RELAXED) ||
-        __atomic_load_n(&rtlog__level, __ATOMIC_RELAXED) >= RTLOG_LEVEL_OFF || !(r = rtlog__claim()))
+        __atomic_load_n(&rtlog__level, __ATOMIC_RELAXED) >= RTLOG_LEVEL_OFF)
+        return s;
+    r = rtlog__claim();
+    if (!r)
         return s;
     uint64_t seq = ++r->span_seq;
     uint64_t id = ((uint64_t)r->ctx << 32) | (seq & 0xffffffffu);
