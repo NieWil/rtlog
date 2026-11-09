@@ -6,10 +6,15 @@ use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(u8)]
 pub enum Level {
+    /// Most verbose; the lowest severity.
     Trace = 0,
+    /// Debugging detail.
     Debug = 1,
+    /// Informational messages.
     Info = 2,
+    /// Warnings.
     Warn = 3,
+    /// Errors; the highest severity.
     Error = 4,
 }
 

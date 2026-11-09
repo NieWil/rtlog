@@ -16,21 +16,32 @@ pub const MAX_FMT: usize = 65_535;
 /// Whether a site is a log call or a span.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
+    /// A log call; `fmt` is its format string.
     Log,
+    /// A span; `fmt` is its name.
     Span,
 }
 
 /// One site as read from the contract.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SiteInfo {
+    /// Site ID that frames from this site carry.
     pub id: u32,
+    /// Log call or span; [`Kind::Log`] when the contract line has no `kind`.
     pub kind: Kind,
+    /// Level of the site.
     pub level: Level,
+    /// Module path of the call site.
     pub module: String,
+    /// Source file of the call site.
     pub file: String,
+    /// Source line of the call site.
     pub line: u32,
+    /// Source column of the call site.
     pub column: u32,
+    /// Format string of a log call, or the name of a span.
     pub fmt: String,
+    /// Number of arguments; equals the number of placeholders in `fmt`.
     pub nargs: u8,
 }
 
@@ -58,34 +69,56 @@ pub struct Contract {
 /// Why a contract was rejected. A rejected contract is never partially applied.
 #[derive(Debug, PartialEq, Eq)]
 pub enum ContractError {
+    /// A line is not a valid site object.
     Json {
+        /// 1-based line number in the contract text.
         line: usize,
+        /// The JSON parser's message.
         msg: String,
     },
+    /// A site's `level` is not one of the five level names.
     BadLevel {
+        /// 1-based line number in the contract text.
         line: usize,
+        /// The level as written.
         level: String,
     },
+    /// Two lines declare the same site ID.
     DuplicateId {
+        /// The repeated site ID.
         id: u32,
     },
+    /// A site ID is in the control-frame range (at or above `CONTROL_BASE`).
     ReservedId {
+        /// The reserved site ID.
         id: u32,
     },
+    /// A site declares more than [`MAX_NARGS`] arguments.
     TooManyArgs {
+        /// The site's ID.
         id: u32,
+        /// The declared argument count.
         nargs: u8,
     },
+    /// A site's format string is longer than [`MAX_FMT`] bytes.
     FmtTooLong {
+        /// The site's ID.
         id: u32,
     },
+    /// A site's `kind` is neither `"log"` nor `"span"`.
     BadKind {
+        /// 1-based line number in the contract text.
         line: usize,
+        /// The kind as written.
         kind: String,
     },
+    /// A site's placeholder count differs from its argument count.
     PlaceholderMismatch {
+        /// The site's ID.
         id: u32,
+        /// Placeholders counted in the format string.
         placeholders: usize,
+        /// The declared argument count.
         nargs: u8,
     },
 }

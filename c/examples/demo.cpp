@@ -39,6 +39,7 @@ int main(int argc, char **argv) {
         }
     });
     std::vector<std::thread> workers;
+    workers.reserve(3);
     for (int w = 0; w < 3; w++) {
         workers.emplace_back([w] {
             std::string name = "worker-" + std::to_string(w);

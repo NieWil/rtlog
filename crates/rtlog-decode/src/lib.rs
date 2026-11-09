@@ -1,5 +1,14 @@
-//! Host decoder for rtlog: joins a stream with its contract and renders text,
-//! JSON lines or a Perfetto / Chrome trace (spec sections 9 and 10).
+//! Host decoder for [rtlog](https://docs.rs/rtlog): joins a stream with its
+//! contract and renders text, JSON lines or a Perfetto / Chrome trace.
+//!
+//! - [`decode`] / [`decode_with`]: a whole capture at once; [`stream::Decoder`]
+//!   event by event. After a damaged frame decoding resumes at the next resync
+//!   frame and the gap is reported.
+//! - [`stdout::init`]: text on stdout while the program runs, like `env_logger`.
+//! - [`elf::contract_from_elf`]: the contract from an ELF binary or firmware.
+//! - The `rtlog` command-line tool (`cargo install rtlog-decode`): `rtlog decode`,
+//!   `rtlog check`, `rtlog contract`; see the
+//!   [CLI reference](https://github.com/NieWil/rtlog/blob/main/docs/reference.md).
 //!
 //! ```
 //! use rtlog_decode::{decode, Contract, Output};
@@ -12,6 +21,8 @@
 //! let out = decode(&contract, drain.transport(), Output::Text, false).unwrap();
 //! assert!(out.text.contains("INFO  motor speed=1200 rpm"));
 //! ```
+
+#![warn(missing_docs)]
 
 pub mod contract;
 pub mod elf;
@@ -42,6 +53,7 @@ pub enum Output {
 /// Decoding options.
 #[derive(Clone, Copy, Debug)]
 pub struct Options {
+    /// Output format; defaults to [`Output::Text`].
     pub output: Output,
     /// Decode even if the stream's contract hash does not match.
     pub force: bool,
@@ -116,9 +128,13 @@ pub struct Decoded {
     /// Rendered output. Text lines show seconds since the first event; JSON and
     /// Perfetto keep absolute nanoseconds and microseconds since the first event.
     pub text: String,
+    /// Log records decoded.
     pub records: usize,
+    /// Spans opened (`span_open` frames decoded).
     pub spans: usize,
+    /// Sum of the counts in all `dropped` frames.
     pub dropped: u64,
+    /// Contexts that announced a name (distinct `ctx_register` IDs).
     pub contexts: usize,
     /// Set when decoding stopped early (a bad frame with no resync frame after
     /// it); the output holds what came before.
@@ -339,8 +355,11 @@ pub fn decode(
 
 /// Decode a whole stream; events are merged across contexts by timestamp.
 ///
-/// Header and contract errors are returned as `Err`; a bad frame later in the
-/// stream ends decoding and is reported in [`Decoded::error`].
+/// Header and contract errors are returned as `Err`. A bad frame later in the
+/// stream is skipped up to the next resync frame and counted in
+/// [`Decoded::gaps`] and [`Decoded::skipped_bytes`]; decoding stops early, with
+/// the reason in [`Decoded::error`], only when there is no resync frame left
+/// to resume at.
 pub fn decode_with(
     contract: &Contract,
     bytes: &[u8],

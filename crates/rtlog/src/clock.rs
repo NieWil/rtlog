@@ -60,7 +60,9 @@ mod hw {
     /// Which source the default clock uses; fixed on first use.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub enum Source {
+        /// The CPU counter: x86-64 invariant TSC halved, or aarch64 `CNTVCT_EL0`.
         Counter,
+        /// `std::time::Instant`, in nanoseconds since the first read.
         Instant,
     }
 

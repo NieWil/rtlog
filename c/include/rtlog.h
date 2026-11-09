@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT OR Apache-2.0 */
 /*
- * rtlog.h: header-only C / C++ producer for the rtlog wire format (v0.1).
+ * rtlog.h: header-only C / C++ producer for the rtlog wire format.
  *
  * A log call writes a site ID, a timestamp delta, a context ID and raw typed
  * argument bytes into the calling thread's own lock-free ring: no formatting,
@@ -34,7 +34,7 @@
 #error "rtlog.h needs GCC or Clang (section attributes and __atomic builtins)"
 #endif
 #if defined(__APPLE__) || defined(_WIN32)
-#error "rtlog.h v0.1 supports ELF targets only (Linux, Zephyr, bare metal)"
+#error "rtlog.h supports ELF targets only (Linux, Zephyr, bare metal)"
 #endif
 #if __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__
 #error "rtlog.h supports little-endian targets only"
@@ -551,7 +551,10 @@ rtlog_span_t rtlog_span_enter(const struct rtlog_site *site) {
     rtlog_span_t s = {0, 0};
     struct rtlog__ring *r;
     if (!__atomic_load_n(&rtlog__spans, __ATOMIC_RELAXED) ||
-        __atomic_load_n(&rtlog__level, __ATOMIC_RELAXED) >= RTLOG_LEVEL_OFF || !(r = rtlog__claim()))
+        __atomic_load_n(&rtlog__level, __ATOMIC_RELAXED) >= RTLOG_LEVEL_OFF)
+        return s;
+    r = rtlog__claim();
+    if (!r)
         return s;
     uint64_t seq = ++r->span_seq;
     uint64_t id = ((uint64_t)r->ctx << 32) | (seq & 0xffffffffu);

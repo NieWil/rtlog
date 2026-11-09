@@ -9,7 +9,7 @@ The [`timing`](../examples/timing.rs) example measures each workload in 2 000 ba
 CI runs it on an x86-64 runner and on an arm64 runner, and posts the table on the job's summary page: [`timing report (x86_64)` / `timing report (aarch64)`](https://github.com/NieWil/rtlog/actions/workflows/ci.yml).
 
 <!-- timing-table -->
-Measured by CI on GitHub-hosted runners (release build), v0.2.0. The `timing report` jobs post fresh numbers on every run.
+Measured by CI on GitHub-hosted runners (release build) when this page was last updated. The `timing report` jobs post fresh numbers on every run.
 
 | Workload | x86-64: AMD EPYC 7763, 3.19 GHz measured | aarch64: 3.39 GHz measured |
 | --- | ---: | ---: |
@@ -23,7 +23,7 @@ Measured by CI on GitHub-hosted runners (release build), v0.2.0. The `timing rep
 | Ring + drain throughput, one thread | 39.3 M frames/s | 41.1 M frames/s |
 <!-- /timing-table -->
 
-A log call costs 6–8× less than formatting the same line, and meets the spec's budget of ≤ 50 cycles per W1 call on both architectures. The `spec rules` CI job reports the figure on every run and warns when it is over (shared runners vary by 10–20 cycles between runs, so the cycle count is not a hard gate; sizes on Cortex-M4F are). Almost all of it is the timestamp read: `RDTSC` and `CNTVCT_EL0` take 30–50 cycles on their own, and the rest of the call (slot reservation, encoding in place in the ring, one release store) runs in their shadow, out of order. To go lower, install a cheaper clock with `rtlog::set_clock` (a cycle counter or a tick). Shared VMs vary from run to run by 10–20 cycles.
+A log call costs 6–8× less than formatting the same line, and meets the spec's budget of ≤ 50 cycles per W1 call on both architectures. The `spec rules` CI job reports the figure on every run and warns when it is over (shared runners vary by 10–20 cycles between runs, so the cycle count is not a hard gate; sizes on Cortex-M4F are). Almost all of it is the timestamp read: `RDTSC` and `CNTVCT_EL0` take 30–50 cycles on their own, and the rest of the call (slot reservation, encoding in place in the ring, one release store) runs in their shadow, out of order. To go lower, install a cheaper clock with `rtlog::set_clock` (a cycle counter or a tick).
 
 ## Size on a microcontroller
 

@@ -5,6 +5,9 @@
 You write `println!`-style log lines. The device writes a few binary bytes into a lock-free ring: no formatting, no allocation, no lock. You read text, JSON or a [Perfetto](https://ui.perfetto.dev) timeline on the host.
 
 [![ci](https://github.com/NieWil/rtlog/actions/workflows/ci.yml/badge.svg)](https://github.com/NieWil/rtlog/actions/workflows/ci.yml)
+[![coverage](https://codecov.io/gh/NieWil/rtlog/graph/badge.svg)](https://codecov.io/gh/NieWil/rtlog)
+[![crates.io](https://img.shields.io/crates/v/rtlog.svg)](https://crates.io/crates/rtlog)
+[![docs.rs](https://img.shields.io/docsrs/rtlog)](https://docs.rs/rtlog)
 ![no_std](https://img.shields.io/badge/no__std-yes-2ea44f)
 ![languages](https://img.shields.io/badge/Rust%20%C2%B7%20C%20%C2%B7%20C%2B%2B%20%C2%B7%20Zephyr-informational)
 ![status](https://img.shields.io/badge/status-v0.2%20preview-orange)
@@ -21,28 +24,71 @@ You write `println!`-style log lines. The device writes a few binary bytes into 
 
 ## Try it
 
-```rust
-rtlog::info!("motor speed={} rpm", rpm);
+`cargo add rtlog`, then:
 
+```rust
+use std::{fs::File, io::BufWriter, time::Duration};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // The format strings, written once; the decoder needs them.
+    rtlog::contract::write("app.contract.jsonl")?;
+    // A background thread moves frames from the rings to a file.
+    let file = BufWriter::new(File::create("app.rtlog")?);
+    let drain = rtlog::spawn_drain(rtlog::IoTransport(file), Duration::from_millis(10));
+
+    for rpm in [1200u32, 1450, 1710] {
+        rtlog::info!("motor speed={} rpm", rpm);
+    }
+    rtlog::warn!("temperature={} C", 81.5f32);
+
+    // Flush what is still in the rings before exiting.
+    let mut out = drain.stop();
+    rtlog::Transport::flush(&mut out);
+    Ok(())
+}
+```
+
+Run it, then decode the capture with the CLI (`cargo install rtlog-decode`):
+
+```text
+$ rtlog decode --contract app.contract.jsonl app.rtlog
+0.000000 [main] INFO  motor speed=1200 rpm
+0.000002 [main] INFO  motor speed=1450 rpm
+0.000002 [main] INFO  motor speed=1710 rpm
+0.000002 [main] WARN  temperature=81.5 C
+4 records, 0 spans, 1 contexts, 0 dropped
+```
+
+Without a drain, log calls fill the rings and nothing leaves the process. Two shortcuts while developing:
+
+```rust
+// Text on stdout while the program runs, like env_logger (cargo add rtlog-decode; RTLOG=debug).
+let _log = rtlog_decode::stdout::init();
+// Unix: keep the last records if the process panics or crashes.
+rtlog::crash::install("crashes/")?;
+```
+
+Spans give each request or control-loop step a slice in [Perfetto](docs/use-cases/perfetto.md):
+
+```rust
 fn handle(req: &Request) {
-    let _span = rtlog::span!("request");          // a slice in Perfetto
+    let _span = rtlog::span!("request");
     rtlog::debug!("route={} bytes={}", req.route, req.len);
 }
 ```
 
-```rust
-let _log = rtlog_decode::stdout::init();          // text on stdout while developing; RTLOG=debug
-rtlog::crash::install("crashes/")?;               // keep the last records if the process dies
-```
+The examples live in this repository; clone it first:
 
 ```sh
+git clone https://github.com/NieWil/rtlog && cd rtlog
 cargo run --release -p rtlog-examples --example perfetto_quickstart
 # open target/quickstart.perfetto.json in https://ui.perfetto.dev
 ```
 
 | Example | Shows |
 | --- | --- |
-| [`perfetto_quickstart`](examples/perfetto_quickstart.rs) | Threads, spans and counters to a Perfetto trace in 40 lines |
+| [`basic`](examples/basic.rs) | The flow above with several threads: drain to a file, contract, decode |
+| [`perfetto_quickstart`](examples/perfetto_quickstart.rs) | Threads, spans and counters to a Perfetto trace in about 60 lines |
 | [`app_trace`](examples/app_trace.rs) | A traced app: 1 kHz control loop, worker pool, a lock-order deadlock caught by a watchdog, heap counters |
 | [`static_rings`](examples/static_rings.rs) | The `no_std` API: static rings, explicit producers, idle-loop drain |
 | [`c/examples`](c/examples) | The same from C and C++ |
@@ -53,7 +99,7 @@ cargo run --release -p rtlog-examples --example perfetto_quickstart
 
 ![Threads write into their own rings; the drain sends frames to the host, which decodes them](docs/images/architecture.svg)
 
-Each call site gets an ID at build time; its format string goes into a contract the host reads from the binary (`rtlog contract --elf`). [Architecture →](docs/architecture.md)
+Each call site gets an ID at build time; its format string goes into a contract. The program can write the contract itself (`rtlog::contract::write`, any OS), or the host reads it from an ELF binary (`rtlog contract --elf`, Linux and firmware). [Architecture →](docs/architecture.md)
 
 ## Guides
 
@@ -64,7 +110,9 @@ Each call site gets an ID at build time; its format string goes into a contract 
 | [Embedded Rust](docs/embedded.md) | `no_std` setup, linker snippet, getting the contract from firmware |
 | [C and C++](docs/c-cpp.md) | Header-only producer, build, capture, decode |
 | [Zephyr](docs/zephyr.md) | Module, Kconfig, transports |
+| [Configuration and CLI](docs/reference.md) | Levels, environment variables, features, every `rtlog` command and option, the JSON output |
 | [Performance and size](docs/performance.md) | Cycles per call, flash and RAM, measuring on your board |
+| [Results from users' boards](results/README.md) | Timing reports from real hardware; [add yours](CONTRIBUTING.md#share-your-boards-results) |
 | [Demo on your device](docs/demo.md) | Prebuilt per architecture: copy to a board, run one script, open the trace on your computer |
 | [Specification](docs/spec.md) · [Roadmap](docs/roadmap.md) · [Implementation notes](docs/implementation.md) | What is built, what is planned, and where the code deviates |
 

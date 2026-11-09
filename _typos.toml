@@ -1,0 +1,12 @@
+# Spell check for code and docs (run in CI: `typos`).
+
+[default]
+# The GitHub owner name, split by typos into "Nie" + "Wil".
+extend-ignore-re = ["NieWil"]
+
+[default.extend-words]
+# `nd`: a local variable (name length) in c/include/rtlog.h.
+nd = "nd"
+
+[files]
+extend-exclude = ["docs/measurements/*.csv", "*.svg"]

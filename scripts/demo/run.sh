@@ -32,6 +32,7 @@ step "system"
 } | tee "$out/system.txt"
 
 step "timing: cost per log call (a few seconds)"
+# RTLOG_BOARD names the board in the report (default: what the system reports).
 "$here/bin/timing" --out "$out/timing.md" >/dev/null
 # The headline rows: platform, clock read, W1..W3, the formatting baselines.
 grep -E '^\| (CPU|Measured core clock|Workload|Clock read|W[1-5]|Disabled|Baseline|W1 speed-up)' "$out/timing.md" || true
@@ -53,7 +54,9 @@ step "decode the raw capture again with the CLI (what you do on the host)"
 cat <<EOF
 
 Done. Results in $out
-  timing.md                 read it, or compare it with other devices
+  timing.md                 read it, compare it with other boards, and share it:
+                            https://github.com/NieWil/rtlog/blob/main/CONTRIBUTING.md#share-your-boards-results
+                            (name your board with RTLOG_BOARD="..." ./run.sh)
   quickstart.perfetto.json  open in https://ui.perfetto.dev (Open trace file)
   app/app.perfetto.json     the traced app in Perfetto
 Copy the directory to your computer, for example:

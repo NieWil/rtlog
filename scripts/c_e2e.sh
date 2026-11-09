@@ -41,7 +41,7 @@ expect_crash() { # mode, expected exit status (128 + signal), expected text
   local st=$?
   set -e
   [ "$st" = "$2" ] || { echo "crash $1: exit $st, expected $2"; exit 1; }
-  [ "$(ls "$OUT/crash-$1" | wc -l)" = 1 ] || { echo "crash $1: expected one dump"; ls "$OUT/crash-$1"; exit 1; }
+  [ "$(find "$OUT/crash-$1" -type f | wc -l)" = 1 ] || { echo "crash $1: expected one dump"; ls "$OUT/crash-$1"; exit 1; }
   "$RTLOG" decode --contract "$OUT/crash.contract.jsonl" "$OUT/crash-$1"/crash-*-1.rtlog > "$OUT/crash-$1.txt"
   [ "$(grep -c 'before crash i=' "$OUT/crash-$1.txt")" = 500 ] || { echo "crash $1: records lost"; tail "$OUT/crash-$1.txt"; exit 1; }
   [ "$(grep -c 'worker step=' "$OUT/crash-$1.txt")" = 200 ] || { echo "crash $1: worker records lost"; exit 1; }
@@ -59,13 +59,13 @@ expect_crash two 139 "CRASH SIGSEGV"
 # A dump never overwrites an existing file, even one with the same pid.
 rm -rf "$OUT/collide" && mkdir -p "$OUT/collide"
 "$OUT/crash" collide "$OUT/collide" || { echo "collide: exit $?"; exit 1; }
-[ "$(ls "$OUT/collide" | wc -l)" = 2 ] || { echo "collide: expected 2 files"; ls "$OUT/collide"; exit 1; }
+[ "$(find "$OUT/collide" -type f | wc -l)" = 2 ] || { echo "collide: expected 2 files"; ls "$OUT/collide"; exit 1; }
 [ "$(cat "$OUT"/collide/crash-*-1.rtlog)" = "earlier crash" ] || { echo "collide: earlier file was overwritten"; exit 1; }
 # A flood of snapshots is capped (16), then a fatal signal is still dumped: 17 files.
 rm -rf "$OUT/flood" && mkdir -p "$OUT/flood"
 set +e; "$OUT/crash" flood "$OUT/flood" 2>/dev/null; st=$?; set -e
 [ "$st" = 139 ] || { echo "flood: exit $st"; exit 1; }
-[ "$(ls "$OUT/flood" | wc -l)" = 17 ] || { echo "flood: expected 17 files"; ls "$OUT/flood" | wc -l; exit 1; }
+[ "$(find "$OUT/flood" -type f | wc -l)" = 17 ] || { echo "flood: expected 17 files"; find "$OUT/flood" -type f | wc -l; exit 1; }
 # The drain writes resync frames; a capture with damage in the middle still decodes
 # past it (the decoder skips to the next resync frame).
 rm -rf "$OUT/resync" && mkdir -p "$OUT/resync"

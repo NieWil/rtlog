@@ -1,0 +1,30 @@
+# cargo-deny: checks every dependency in Cargo.lock (run in CI: `cargo deny check`).
+
+[graph]
+all-features = true
+
+[advisories]
+# Known vulnerabilities and unmaintained crates from the RustSec database fail CI.
+yanked = "deny"
+
+[licenses]
+# rtlog is MIT OR Apache-2.0. Only the licences dependencies use today are
+# allowed; a new one fails CI until it is reviewed and added here.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Unicode-3.0", # unicode-ident
+]
+confidence-threshold = 0.9
+
+[bans]
+# Two versions of one crate are allowed but reported.
+multiple-versions = "warn"
+wildcards = "deny"
+# Workspace path dependencies (examples, size/mcu) carry no version.
+allow-wildcard-paths = true
+
+[sources]
+# Only crates.io; no git or other registries.
+unknown-registry = "deny"
+unknown-git = "deny"

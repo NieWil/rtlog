@@ -21,49 +21,76 @@ use crate::value::{self, Value, ValueError};
 pub struct Record<'c> {
     /// Absolute time on the target clock, in nanoseconds.
     pub ts_ns: u64,
+    /// Context ID of the ring the frame came from.
     pub ctx: u32,
+    /// The contract entry for the frame's site ID.
     pub site: &'c SiteInfo,
+    /// Decoded arguments in call order; `site.nargs` of them.
     pub args: Vec<Value>,
 }
 
 /// One item of a decoded stream.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Event<'c> {
+    /// A log frame.
     Record(Record<'c>),
+    /// A span was entered.
     SpanOpen {
+        /// Absolute time on the target clock, in nanoseconds.
         ts_ns: u64,
+        /// Context that entered the span.
         ctx: u32,
+        /// Span ID: high 32 bits are the context ID, low 32 bits a per-context counter.
         id: u64,
+        /// ID of the enclosing span, or 0 at the root.
         parent: u64,
+        /// The contract entry of the span site; `site.fmt` is the span name.
         site: &'c SiteInfo,
     },
+    /// A span was exited.
     SpanClose {
+        /// Absolute time on the target clock, in nanoseconds.
         ts_ns: u64,
+        /// Context that exited the span.
         ctx: u32,
+        /// ID of the span, as in its [`Event::SpanOpen`].
         id: u64,
     },
+    /// A context announced its name.
     CtxRegister {
+        /// The context ID.
         ctx: u32,
+        /// Its name; invalid UTF-8 is replaced with U+FFFD.
         name: String,
     },
+    /// A context ended: its ring was closed and fully drained.
     CtxClose {
+        /// The context ID.
         ctx: u32,
     },
+    /// Frames were dropped because a ring was full or a call did not fit.
     Dropped {
+        /// Context whose frames were dropped.
         ctx: u32,
+        /// Frames dropped since the previous report for that context.
         count: u32,
     },
     /// A context's clock was set (crash dumps carry only the tail of a ring).
     CtxTime {
+        /// The context ID.
         ctx: u32,
+        /// Absolute clock value in target ticks; later deltas add to it.
         ticks: u64,
     },
     /// A resync frame: the stream header again, as a point to recover at.
     Resync,
     /// The process crashed (or a snapshot was requested); last frame of a dump.
     Crash {
+        /// Absolute time on the target clock, in nanoseconds.
         ts_ns: u64,
+        /// Context that wrote the crash frame.
         ctx: u32,
+        /// What the crash frame says.
         crash: Crash,
     },
 }
@@ -73,12 +100,16 @@ pub enum Event<'c> {
 pub struct Crash {
     /// 1 = panic, 2 = signal, 3 = snapshot requested by the program.
     pub kind: u8,
+    /// Signal number for a signal crash, 0 otherwise.
     pub signal: i32,
+    /// The signal's `si_code` for a signal crash, 0 otherwise.
     pub code: i32,
     /// Faulting address (signals), 0 otherwise.
     pub addr: u64,
     /// Program counter at the fault, where the platform reports it.
     pub pc: u64,
+    /// Panic message, signal name or snapshot reason; at most 127 bytes, with
+    /// invalid UTF-8 replaced with U+FFFD.
     pub message: String,
 }
 
@@ -119,11 +150,27 @@ pub enum DecodeError {
     /// Unsupported frame grammar.
     WireVersion(u8),
     /// The stream was produced by a different build.
-    ContractMismatch { stream: u32, contract: u32 },
+    ContractMismatch {
+        /// Contract hash in the stream header.
+        stream: u32,
+        /// Hash of the loaded contract.
+        contract: u32,
+    },
     /// A frame names a site the contract does not have.
-    UnknownSite { offset: usize, id: u32 },
+    UnknownSite {
+        /// Byte offset of the frame in the input.
+        offset: usize,
+        /// The unknown site ID.
+        id: u32,
+    },
     /// A frame ends early or holds invalid bytes.
-    BadFrame { offset: usize, reason: String },
+    BadFrame {
+        /// Byte offset of the frame in the input; for trailing bytes after a
+        /// frame given to [`Session::decode_frame`], the offset where they start.
+        offset: usize,
+        /// What was wrong, such as `truncated name`.
+        reason: String,
+    },
 }
 
 impl fmt::Display for DecodeError {

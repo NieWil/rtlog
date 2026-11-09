@@ -2,7 +2,7 @@
 
 rtlog captures are complete timelines: every thread, every span, every log record with its typed fields. `rtlog decode --perfetto` turns one into a trace that [Perfetto](https://ui.perfetto.dev) opens directly. So do `chrome://tracing` and [Speedscope](https://www.speedscope.app).
 
-## In 40 lines
+## The quickstart example
 
 [`examples/perfetto_quickstart.rs`](../../examples/perfetto_quickstart.rs) runs three worker threads. Each job is a span with an `io` span inside, and every job logs its queue depth:
 

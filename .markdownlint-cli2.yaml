@@ -7,3 +7,6 @@ config:
     siblings_only: true
 globs:
   - "**/*.md"
+# Board results are generated reports kept unedited (scripts/results.py checks them).
+ignores:
+  - "results/*/*.md"

@@ -1,9 +1,26 @@
-//! rtlog core: deferred, lock-free, allocation-free logging.
+//! rtlog: deferred, lock-free, allocation-free logging.
 //!
 //! A log call writes a site ID, a timestamp delta, a context ID and raw
 //! argument bytes into the calling context's own ring. Format strings never
-//! reach the wire: they live in the contract, which the host decoder joins with
-//! the stream to render text.
+//! reach the wire: they live in the contract, which the host decoder
+//! ([`rtlog-decode`](https://docs.rs/rtlog-decode)) joins with the stream to
+//! render text, JSON lines or a Perfetto trace.
+//!
+//! Nothing leaves the rings until a **drain** moves frames to a transport: with
+//! `std`, `spawn_drain` runs one on a background thread, or call
+//! `Drain::poll` yourself; on `no_std`, call [`drain::drain_ring`] from the
+//! idle loop. The contract comes from `contract::write` (any OS) or from the
+//! binary (`rtlog contract --elf`, ELF only).
+//!
+//! - Default feature `std`: per-thread rings created on first use, the drain
+//!   thread, `contract`, and on Unix the `crash` handler.
+//! - `default-features = false`: `no_std`, no allocation; static [`Ring`]s and
+//!   explicit producers (`info!(to: &mut producer, ...)`).
+//!
+//! Guides: [getting started](https://github.com/NieWil/rtlog#try-it),
+//! [configuration and CLI](https://github.com/NieWil/rtlog/blob/main/docs/reference.md),
+//! [embedded](https://github.com/NieWil/rtlog/blob/main/docs/embedded.md),
+//! [crash dumps](https://github.com/NieWil/rtlog/blob/main/docs/crash.md).
 //!
 //! ```
 //! rtlog::info!("pid out={} err={}", 0.42f32, -3i16);
@@ -23,6 +40,7 @@
 //! ```
 
 #![cfg_attr(not(feature = "std"), no_std)]
+#![warn(missing_docs)]
 
 #[cfg(feature = "std")]
 extern crate std;

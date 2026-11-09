@@ -19,7 +19,9 @@ const USAGE: &str = "usage:
   rtlog contract --elf <binary> [-o <contract.jsonl>]
 
   --json and --perfetto are short for --out json and --out perfetto.
-  Perfetto output opens in https://ui.perfetto.dev (Open trace file).";
+  Perfetto output opens in https://ui.perfetto.dev (Open trace file).
+  `contract --elf` reads ELF binaries (Linux, embedded firmware). On macOS and
+  Windows, have the program write its contract with rtlog::contract::write(path).";
 
 /// Write to stdout; a closed pipe (`| head`) ends output quietly instead of panicking.
 fn write_stdout(s: &str) {
@@ -32,6 +34,11 @@ fn load_contract(path: &str) -> Result<Contract, String> {
 }
 
 fn run(args: &[String]) -> Result<(), String> {
+    // `rtlog <subcommand> --help` prints the usage, like `rtlog --help`.
+    if args.iter().skip(1).any(|a| a == "-h" || a == "--help") {
+        write_stdout(&format!("{USAGE}\n"));
+        return Ok(());
+    }
     match args.first().map(String::as_str) {
         Some("decode") => {
             let mut contract = None;

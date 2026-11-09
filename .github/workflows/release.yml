@@ -182,7 +182,7 @@ jobs:
         with:
           path: dist
           merge-multiple: true
-      - run: cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS
+      - run: cd dist && sha256sum -- * > SHA256SUMS && cat SHA256SUMS
       - name: Release notes from CHANGELOG.md
         run: |
           # The section for this version: from its heading to the next one.

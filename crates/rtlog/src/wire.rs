@@ -59,12 +59,19 @@ pub fn span_open_payload(site: u32, id: u64, parent: u64) -> [u8; 20] {
 /// Stream header, sent once at the start of a stream.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Header {
+    /// Frame grammar version; [`WIRE_VERSION`] for this crate.
     pub wire_version: u8,
+    /// Site ID scheme; [`SCHEME_HASH32`] (1 is reserved).
     pub scheme: u8,
+    /// Hash of the contract's site IDs; see [`crate::site::contract_hash`].
     pub contract_hash: u32,
+    /// Timestamp rate in ticks per second.
     pub clock_hz: u32,
+    /// Size of `usize` on the target in bytes (4 or 8).
     pub ptr_width: u8,
+    /// 0; bits reserved for drain compression and authenticated or encrypted blocks.
     pub flags: u8,
+    /// 0; reserved.
     pub key_id: u8,
 }
 

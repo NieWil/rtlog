@@ -1,0 +1,33 @@
+# Static analysis of the C/C++ header (c/include/rtlog.h), run in CI on the
+# examples that include it. Every warning is an error; each disabled check
+# says why.
+Checks: >
+  -*,
+  bugprone-*,
+  cert-*,
+  clang-analyzer-*,
+  performance-*,
+  portability-*,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-reserved-identifier,
+  -cert-dcl37-c,
+  -cert-dcl51-cpp,
+  -cert-err33-c,
+  -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,
+  -bugprone-not-null-terminated-result,
+  -performance-no-int-to-ptr,
+  -performance-enum-size
+# Why each check is off:
+# - easily-swappable-parameters: (ptr, len) pairs everywhere; style only.
+# - reserved-identifier, cert-dcl37-c, cert-dcl51-cpp: internals use the
+#   `rtlog__` prefix as a namespace, and `__start_rtlog_sites` /
+#   `__stop_rtlog_sites` are names the linker defines.
+# - cert-err33-c: write(2) results in the signal handler are deliberately
+#   best effort.
+# - insecureAPI.DeprecatedOrUnsafeBufferHandling: asks for C11 Annex K
+#   memcpy_s, which glibc, newlib and Zephyr do not provide.
+# - not-null-terminated-result: the copies are binary frames, not strings.
+# - no-int-to-ptr: ring and site addresses are computed on purpose.
+# - enum-size: the header must stay valid C, where enums are int-sized.
+WarningsAsErrors: '*'
+HeaderFilterRegex: 'c/include/.*'

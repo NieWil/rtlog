@@ -35,7 +35,7 @@ ssh pi@raspberrypi.local
 # on the device
 tar xzf rtlog-demo-*.tar.gz
 cd rtlog-demo-*/
-./run.sh                       # results in ./results-<hostname>/
+RTLOG_BOARD="Raspberry Pi 5" ./run.sh   # results in ./results-<hostname>/
 ```
 
 It takes a few seconds. The script prints the timing table, for example on x86-64:
@@ -66,13 +66,22 @@ scp -r pi@raspberrypi.local:rtlog-demo-*/results-raspberrypi .
 
 | File | What it is |
 | --- | --- |
-| `timing.md` | Cost per call: clock read, W1–W3 payloads, disabled level, formatting baselines, 8 contending threads, throughput. Markdown: paste it in an issue to compare devices. |
+| `timing.md` | Board, CPU, OS, rtlog and Rust versions, then the cost per call: clock read, W1 (two `u32` fields) to W3 payloads, disabled level, formatting baselines, 8 contending threads, throughput. [Share it](#share-your-results). |
 | `quickstart.perfetto.json` | Threads and spans. Open [ui.perfetto.dev](https://ui.perfetto.dev) → *Open trace file*. |
 | `app/app.perfetto.json` | The traced app: 1 kHz control loop with deadline misses, HTTP workers, a lock-order deadlock caught by a watchdog, heap counters. |
 | `app/app.rtlog`, `app/app.contract.jsonl` | The raw binary capture and its contract: what a real device sends to the host. |
 | `app/app.txt`, `app/app.jsonl` | The same capture decoded as text and JSON lines. |
 | `stdout.txt` | The stdout mode: text printed while the program runs, like `env_logger`. |
 | `system.txt` | CPU, kernel, core count. |
+
+### Share your results
+
+Other users compare boards in [results/](../results/README.md). Name the board when you run the demo (`RTLOG_BOARD="..."`; without it the report uses what the system reports, such as the device-tree model on a Raspberry Pi), then either:
+
+- open an issue with the [board results form](https://github.com/NieWil/rtlog/issues/new?template=board-results.yml) and paste `timing.md`, or
+- open a pull request that adds it unedited as `results/<rtlog version>/<board>.md` (lowercase, dashes: `results/0.2.4/raspberry-pi-5.md`) and runs `python3 scripts/results.py` to refresh the table. CI checks the file.
+
+Results are kept per rtlog version, so a new version gets a new file and old numbers stay comparable.
 
 ## 4. Device writes, host decodes
 

@@ -62,10 +62,14 @@ pub fn to_jsonl() -> String {
 pub enum ContractError {
     /// Two sites hash to the same ID.
     Collision {
+        /// The shared site ID.
         id: u32,
+        /// `file:line` of the first site.
         a: String,
+        /// `file:line` of the second site.
         b: String,
     },
+    /// Writing the contract file failed.
     Io(std::io::Error),
 }
 

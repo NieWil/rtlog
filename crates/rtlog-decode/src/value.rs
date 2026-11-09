@@ -10,25 +10,51 @@ pub const MAX_DEPTH: usize = 8;
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(untagged)]
 pub enum Value {
+    /// Any unsigned integer (`U8` to `U64`), widened to `u64`.
     U(u64),
+    /// Any signed integer (`I8` to `I64`), widened to `i64`.
     I(i64),
+    /// An `F32` or `F64`, widened to `f64`.
     F(f64),
+    /// A `bool`.
     Bool(bool),
+    /// A `char`.
     Char(char),
-    Str { s: String, truncated: bool },
-    Bytes { bytes: Vec<u8>, truncated: bool },
+    /// A string argument.
+    Str {
+        /// The text that was recorded, at most 127 bytes.
+        s: String,
+        /// The target cut the string to fit; rendered with a trailing `…`.
+        truncated: bool,
+    },
+    /// A byte slice argument.
+    Bytes {
+        /// The bytes that were recorded, at most 127.
+        bytes: Vec<u8>,
+        /// The target cut the slice to fit; rendered with a trailing `…`.
+        truncated: bool,
+    },
+    /// An `Option`: `None`, or the inner value.
     Option(Option<Box<Value>>),
+    /// A fixed-size array, element by element.
     Array(Vec<Value>),
 }
 
 /// Why argument bytes could not be parsed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ValueError {
+    /// The input ended inside a value, or an array count exceeds what the
+    /// remaining bytes could hold.
     Truncated,
+    /// The tag byte is not a known [`Tag`]; holds the byte.
     BadTag(u8),
+    /// A `Str` payload is not valid UTF-8.
     BadUtf8,
+    /// A `Char` payload is not a Unicode scalar value.
     BadChar,
+    /// A `Bool` value or an `Option` presence byte is neither 0 nor 1.
     BadBool,
+    /// `Option`/`Array` nesting is deeper than [`MAX_DEPTH`].
     TooDeep,
 }
 

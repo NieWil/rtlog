@@ -118,12 +118,13 @@ contention or end-to-end throughput.
 
 ## Reproduce the builds
 
-Activate the installed environment and work in the external Zephyr workspace:
+Activate the environment from [Zephyr](zephyr.md#build-and-flash) and work in
+the Zephyr workspace. Change `RTLOG_DIR` to your rtlog checkout's absolute path:
 
 ```sh
-. ~/.venvs/rtlog-zephyr/bin/activate
+. ~/.venvs/zephyr/bin/activate
 cd ~/zephyrproject
-export RTLOG_DIR=/home/niels/ui-mockup-task/rtlog
+export RTLOG_DIR=/absolute/path/to/rtlog
 export APP="$RTLOG_DIR/c/zephyr/samples/benchmark"
 
 west build -d build/rtlog-benchmark -b nucleo_l432kc "$APP" -- \
@@ -143,27 +144,35 @@ west build -d build/footprint-zephyr -b nucleo_l432kc "$APP" -- \
 
 ## WSL access and capture
 
-The device is already attached to WSL, so no additional usbipd attach is
-currently needed. Install the SDK's ST-LINK udev rules and configure serial
-permissions for a persistent solution. On WSL, ensure udev is actually running;
-otherwise a rule file alone will not change an existing device node.
+On WSL, first attach the ST-LINK to the Linux side with
+[usbipd-win](https://github.com/dorssel/usbipd-win). In an administrator
+PowerShell on Windows:
 
-For this attachment only, the user can run the following privileged commands
-directly in their own terminal. The current user already belongs to `plugdev`:
-
-```sh
-sudo chgrp plugdev /dev/bus/usb/001/003 /dev/ttyACM0
-sudo chmod g+rw /dev/bus/usb/001/003 /dev/ttyACM0
+```powershell
+usbipd list                          # note the ST-LINK's BUSID
+usbipd bind --busid <BUSID>          # once per device
+usbipd attach --wsl --busid <BUSID>  # again after each reconnect
 ```
 
-Confirm the USB node still identifies the ST-LINK before applying these
-commands; USB bus/device numbers can change after reconnecting. These changes
-do not survive device reattachment. Do not run builds as root.
+On native Linux, skip this step.
+
+Then give your user access to the probe and its serial port, without root:
+
+- Install the ST-LINK udev rules, for example `60-openocd.rules` from the
+  Zephyr SDK's OpenOCD (`share/openocd/contrib/`), into `/etc/udev/rules.d/`,
+  and run `sudo udevadm control --reload && sudo udevadm trigger`.
+- Add your user to the group those rules use (usually `plugdev`) and to the
+  serial group (usually `dialout`), for example
+  `sudo usermod -aG plugdev,dialout "$USER"`, then log in again.
+
+On WSL, check that udev is running; otherwise a rule file does not change a
+device node that already exists. Reattach the probe after installing the
+rules. Do not run builds as root.
 
 Once access is fixed:
 
 ```sh
-. ~/.venvs/rtlog-zephyr/bin/activate
+. ~/.venvs/zephyr/bin/activate
 cd ~/zephyrproject
 west flash -d build/rtlog-benchmark --runner openocd
 stty -F /dev/ttyACM0 115200 raw -echo -ixon -ixoff -crtscts
