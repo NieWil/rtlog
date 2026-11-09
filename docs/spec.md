@@ -1,4 +1,4 @@
-# Real-Time Deferred Logger — Specification v0.2.1
+# Real-Time Deferred Logger — Specification (v0.2.x)
 
 Nov 2, 2026 · @Niels
 
@@ -138,7 +138,7 @@ A site ID is a 32-bit content hash, so the scheme works on every target and obje
 
 - Rust: `id = fnv1a32(module | file | line | column | format | level | nargs)`, computed at compile time by the macro; IDs that fall in the control range (`0xFFFF_FF00..`) have their top bit flipped. Argument types travel on the wire as tags (section 5) instead of in the hash, because a declarative macro cannot see them.
 - C and C++: the descriptor's index in the `rtlog_sites` section plus one. C has no compile-time string hashing; adding a site renumbers the ones after it, which the contract hash catches.
-- Birthday bound at 32 bits: a few thousand sites collide with probability well under 1 in 10 000 per build; a crate's own sites are checked for collisions in its tests (a whole-program check is on the roadmap).
+- Birthday bound at 32 bits: the chance that two of n sites collide is about n²/2³³, so about 1 in 8 600 at 1 000 sites and 1 in 950 at 3 000 per build; a crate's own sites are checked for collisions in its tests (a whole-program check is on the roadmap).
 - Span sites use the same scheme with a distinct mix, and `kind: "span"`.
 
 **Contract entry** (one JSON line per site, as `rtlog contract --elf` and `rtlog::contract::write` produce it)
@@ -149,7 +149,7 @@ A site ID is a 32-bit content hash, so the scheme works on every target and obje
 
 **Generation**
 
-1. Each macro call emits one `static` descriptor into a link section collected by `linkme` (`linkme_SITES` on ELF, the equivalent Mach-O and PE sections). C and C++ emit `struct rtlog_site` into `rtlog_sites`. No files are written at expansion time, so parallel crate builds cannot race.
+1. Each macro call emits one `static` descriptor into a link section collected by `linkme` (`linkme_SITES` on ELF, the equivalent Mach-O and PE sections). `rtlog contract --elf` reads only the ELF section; on macOS and Windows the program writes its own contract with `contract::write`. C and C++ emit `struct rtlog_site` into `rtlog_sites`. No files are written at expansion time, so parallel crate builds cannot race.
 2. `rtlog contract --elf <image>` reads the descriptors with the `object` crate, applies `RELATIVE` relocations for position-independent executables, validates them and writes the JSON-lines contract. On `std`, `rtlog::contract::write` writes the same file from the running program.
 3. The descriptor section ships in the image: binaries are self-describing, and format strings are present in them. Stripping is on the roadmap.
 
@@ -324,7 +324,7 @@ On a panic, `SIGSEGV`, `SIGBUS`, `SIGFPE`, `SIGILL` or `SIGABRT` (so `abort()` a
 
 `snapshot(reason)` writes the same dump without crashing (kind 3), for watchdogs that detect a deadlock or a missed deadline. `dumps()` returns how many dumps the process wrote.
 
-The handler allocates nothing, formats nothing on the signal path, never sleeps, takes no blocking lock, and uses `open` / `write` / `close` only. It runs on an alternate signal stack of 64 KiB (`SIGNAL_STACK`) with a guard page, which `install` sets up for the calling thread and every thread gets when it first logs after that; a thread that never logs keeps its default one. The default Rust gives a thread is `max(SIGSTKSZ, AT_MINSIGSTKSZ)`, often 8 KiB, and the CPU's saved state takes a few KiB of it: too little for a debug build's dump, which then overflowed, wrote only the stream header and died of `SIGSEGV`. C threads run the handler on their own stack (`SA_ONSTACK` with no alternate stack installed). What a dump cannot contain: frames already handed to a transport but still in its buffer, frames dropped because a ring was full (counted), and anything after `SIGKILL` or power loss. Tests crash real child processes (Rust: panic on division by zero, null write, hardware divide by zero, `abort`, a segfault while the drain is blocked in a transport write, two caught panics; C: the same crashes plus snapshot) and check that every record logged before the crash is in the dump.
+The handler allocates nothing, formats nothing on the signal path, never sleeps, takes no blocking lock, and uses `open` / `write` / `close` only. Since the release after 0.2.3, it runs on an alternate signal stack of 64 KiB (`SIGNAL_STACK`) with a guard page, which `install` sets up for the calling thread and every thread gets when it first logs after that; a thread that never logs keeps its default one. The default Rust gives a thread is `max(SIGSTKSZ, AT_MINSIGSTKSZ)`, often 8 KiB, and the CPU's saved state takes a few KiB of it: too little for a debug build's dump, which then overflowed, wrote only the stream header and died of `SIGSEGV`. C threads run the handler on their own stack (`SA_ONSTACK` with no alternate stack installed). What a dump cannot contain: frames already handed to a transport but still in its buffer, frames dropped because a ring was full (counted), and anything after `SIGKILL` or power loss. Tests crash real child processes (Rust: panic on division by zero, null write, hardware divide by zero, `abort`, a segfault while the drain is blocked in a transport write, two caught panics; C: the same crashes plus snapshot) and check that every record logged before the crash is in the dump.
 
 MCU crash capture (exception frame into flash or `.noinit`) is on the roadmap.
 
@@ -344,7 +344,7 @@ The decoder (`rtlog-decode`, a library plus the `rtlog` CLI) turns a stream and 
 | Mode | Flag | Use |
 | --- | --- | --- |
 | Text | default | `12.345678 [motor] INFO  pid out=0.42 err=-3`, colours with `--color` |
-| JSON lines | `--json` | one object per record: `ts_ns`, `ctx`, `ctx_name`, `level`, `site`, `module`, `file`, `line`, `message`, `args` |
+| JSON lines | `--json` | one object per record, with `type` (`log`, `span`, `dropped`, `gap`, `crash`); a `log` record has `ts_ns`, `ctx`, `ctx_name`, `level`, `site`, `module`, `file`, `line`, `message`, `args` ([all fields](reference.md#json-lines-output)) |
 | Perfetto / Chrome trace | `--perfetto` | contexts to tracks, spans to slices, records to instant events, crashes to markers; opens in ui.perfetto.dev |
 | Frame by frame | library (`stream::Session::decode_frame`) | for in-process consumers such as the stdout mode |
 
@@ -421,7 +421,7 @@ Budgets are stated in CPU cycles, because a call's cost is a cycle count and its
 | 10 | Versioning | `wire_version` in the header; contract fields versioned separately |
 | 11 | Tests | Miri, ThreadSanitizer, AddressSanitizer, 2-minute soak, QEMU on 4 architectures, child-process crash tests, mutation test of the decoder |
 | 12 | Debug stdout | `rtlog_decode::stdout`: decoder in the drain thread, level from `RTLOG` |
-| 13 | Naming | `rtlog` everywhere: crates `rtlog-*`, macros `rtlog::`, CLI `rtlog`, files `.rtlog`, env `RTLOG_*` |
+| 13 | Naming | `rtlog` everywhere: crates `rtlog` and `rtlog-decode`, macros `rtlog::`, CLI `rtlog`, files `.rtlog`, env `RTLOG_*` |
 | 14 | Licence | MIT OR Apache-2.0, at the user's option |
 | 15 | Log hot path | Encode in place in the ring on hosts; stack buffer + one shared push on bare metal (code size) |
 | 16 | Crash log | Read-only dump of every ring's unread tail + `crash` frame, one numbered file per dump, from a panic hook and async-signal-safe handlers, never waiting for the drain |

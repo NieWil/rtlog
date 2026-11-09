@@ -2,6 +2,8 @@
 
 A log call writes into the calling thread's ring and returns; a drain sends the frames out later. So when a process dies, the most recent records may still be in the rings. rtlog's crash handler writes them to a file before the process goes, so you see what happened right before the failure.
 
+Available on Unix (Linux, macOS, the BSDs) with the `std` feature, and in C on POSIX. Windows and bare-metal targets have no crash dump yet ([roadmap](roadmap.md)).
+
 ## What to do
 
 1. **Install the handler first thing in `main`**, with a directory on a disk that survives the crash:
@@ -58,7 +60,7 @@ The handler runs while the process is in an unknown state, so it does only what 
 - it reads each ring's unread frames without consuming them, and writes with `open` / `write` / `close`; the file name is built without `snprintf`;
 - before each ring's frames it writes a `ctx_time` frame, so the dump decodes to the right absolute times even though earlier frames went to the main stream;
 - if two threads fault at once, the second waits (two seconds at most) for the first dump to finish instead of ending the process under it; the handler restores the default action itself rather than using `SA_RESETHAND`, which would have killed the second thread on the spot;
-- it runs on its own 64 KiB alternate signal stack, with a guard page below it. `install` sets one up for the calling thread, and every thread gets one when it first logs after that. The 8 KiB stack Rust gives a thread by default on most x86-64 CPUs was too small for the dump in a debug build;
+- it runs on its own 64 KiB alternate signal stack, with a guard page below it (since the release after 0.2.3). `install` sets one up for the calling thread, and every thread gets one when it first logs after that. The 8 KiB stack Rust gives a thread by default on most x86-64 CPUs was too small for the dump in a debug build;
 - for fatal signals it first turns logging off, so the dump is a consistent snapshot. If the drain was consuming at that moment, a frame can appear both in the main stream and in the dump, never in neither. Then the default action runs (core dump, exit status naming the signal). After a panic the previous panic hook runs and the program continues if it can.
 
 Tests crash real child processes in each of these ways, including with a drain blocked in a transport write, and check that every record logged before the crash is in the dump: [`crates/rtlog-decode/tests/crash.rs`](../crates/rtlog-decode/tests/crash.rs) for Rust, and [`c/examples/crash.c`](../c/examples/crash.c) through [`scripts/c_e2e.sh`](../scripts/c_e2e.sh) for C.

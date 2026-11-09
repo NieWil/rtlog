@@ -75,3 +75,21 @@ fn cli_decodes_files_and_checks_contracts() {
 
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn every_subcommand_prints_usage_on_help() {
+    for args in [
+        &["--help"][..],
+        &["decode", "--help"],
+        &["check", "--help"],
+        &["contract", "-h"],
+    ] {
+        let out = rtlog_cmd().args(args).output().unwrap();
+        assert!(out.status.success(), "rtlog {args:?}: {out:?}");
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            text.contains("rtlog decode --contract"),
+            "rtlog {args:?}: {text}"
+        );
+    }
+}
