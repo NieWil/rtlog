@@ -119,6 +119,13 @@ Each call site gets an ID at build time; its format string goes into a contract.
 ## Get it
 
 - **CLI** (`rtlog decode`, `rtlog contract`): prebuilt for Linux (x86-64, x86, arm64, ARMv7, ARMv6, RISC-V 64), macOS and Windows on the [releases page](https://github.com/NieWil/rtlog/releases). Or build it: `cargo install rtlog-decode`.
+- **Debian / Ubuntu** (amd64, i386, arm64, armhf), from the releases page (since 0.2.5):
+
+  ```sh
+  sudo apt install ./rtlog_<version>-1_amd64.deb      # the rtlog command and its man page
+  sudo apt install ./rtlog-dev_<version>-1_all.deb    # rtlog.h for C/C++, with pkg-config
+  ```
+
 - **Rust**: `cargo add rtlog` (for bare metal: `cargo add rtlog --no-default-features`).
 - **Demo**: `rtlog-demo-<version>-<target>` on the releases page runs the timing report and a traced app on any of those machines. [How →](docs/demo.md)
 - **C / C++ / Zephyr**: the `rtlog-c` package on the releases page, or [`c/include/rtlog.h`](c/include/rtlog.h) and the [Zephyr module](docs/zephyr.md).

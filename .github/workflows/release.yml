@@ -23,6 +23,8 @@ on:
       - "Cargo.toml"
       - "**/Cargo.toml"
       - "scripts/demo/**"
+      - "scripts/build_deb.sh"
+      - "packaging/**"
       - "docs/demo.md"
   workflow_dispatch:
     inputs:
@@ -70,10 +72,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { target: x86_64-unknown-linux-musl, os: ubuntu-latest, cross: true }
-          - { target: i686-unknown-linux-musl, os: ubuntu-latest, cross: true }
-          - { target: aarch64-unknown-linux-musl, os: ubuntu-latest, cross: true }
-          - { target: armv7-unknown-linux-musleabihf, os: ubuntu-latest, cross: true }
+          # `deb`: Debian architecture of the .deb built from this binary.
+          - { target: x86_64-unknown-linux-musl, os: ubuntu-latest, cross: true, deb: amd64 }
+          - { target: i686-unknown-linux-musl, os: ubuntu-latest, cross: true, deb: i386 }
+          - { target: aarch64-unknown-linux-musl, os: ubuntu-latest, cross: true, deb: arm64 }
+          - { target: armv7-unknown-linux-musleabihf, os: ubuntu-latest, cross: true, deb: armhf }
           - { target: arm-unknown-linux-musleabihf, os: ubuntu-latest, cross: true }
           - { target: riscv64gc-unknown-linux-gnu, os: ubuntu-latest, cross: true }
           - { target: x86_64-apple-darwin, os: macos-latest }
@@ -147,12 +150,28 @@ jobs:
             tar czf "$name.tar.gz" "$name"; tar czf "$demo.tar.gz" "$demo"
           fi
           ls -la
+      - name: Debian package
+        if: matrix.deb
+        run: |
+          deb=$(scripts/build_deb.sh cli "$RELEASE_VERSION" ${{ matrix.deb }} target/${{ matrix.target }}/dist/rtlog dist)
+          dpkg-deb --info "$deb"
+          dpkg-deb --contents "$deb"
+          dpkg-deb --contents "$deb" | grep -q ' ./usr/bin/rtlog$'
+      - name: Install, run and lint the Debian package (amd64)
+        if: matrix.deb == 'amd64'
+        run: |
+          sudo apt-get install -y -qq ./dist/rtlog_*_amd64.deb lintian >/dev/null
+          rtlog --help | head -3
+          dpkg -L rtlog | grep -q /usr/share/man/man1/rtlog.1.gz
+          lintian --fail-on error --tag-display-limit 0 dist/rtlog_*_amd64.deb
+          sudo apt-get remove -y -qq rtlog >/dev/null
       - uses: actions/upload-artifact@v4
         with:
           name: cli-${{ matrix.target }}
           path: |
             dist/*.tar.gz
             dist/*.zip
+            dist/*.deb
 
   c-package:
     name: C/C++ header and Zephyr module
@@ -166,10 +185,22 @@ jobs:
           mkdir -p "dist/$name"
           cp -r c/include c/examples c/zephyr zephyr docs/c-cpp.md docs/zephyr.md LICENSE-MIT LICENSE-APACHE "dist/$name/"
           tar czf "dist/$name.tar.gz" -C dist "$name"
+      - name: Debian package (rtlog-dev), installed and used through pkg-config
+        run: |
+          deb=$(scripts/build_deb.sh dev "$RELEASE_VERSION" dist)
+          dpkg-deb --contents "$deb"
+          sudo apt-get install -y -qq "./$deb" lintian >/dev/null
+          pkg-config --modversion rtlog
+          # shellcheck disable=SC2046 # pkg-config output is a list of flags
+          cc -O2 -std=gnu11 c/examples/demo.c $(pkg-config --cflags --libs rtlog) -o "$RUNNER_TEMP/demo"
+          lintian --fail-on error --tag-display-limit 0 "$deb"
+          sudo apt-get remove -y -qq rtlog-dev >/dev/null
       - uses: actions/upload-artifact@v4
         with:
           name: c-package
-          path: dist/*.tar.gz
+          path: |
+            dist/*.tar.gz
+            dist/*.deb
 
   publish:
     name: publish GitHub release

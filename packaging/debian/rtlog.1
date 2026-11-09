@@ -1,0 +1,102 @@
+.TH RTLOG 1 "2026-11-09" "rtlog" "User Commands"
+.SH NAME
+rtlog \- decode rtlog binary log streams to text, JSON lines or Perfetto traces
+.SH SYNOPSIS
+.B rtlog decode
+.B \-\-contract
+.I contract.jsonl
+.RB [ \-\-out " " text | json | perfetto ]
+.RB [ \-o
+.IR file ]
+.RB [ \-\-color " " auto | always | never ]
+.RB [ \-\-no\-spans ]
+.RB [ \-\-force ]
+.I stream.rtlog
+.br
+.B rtlog check
+.I contract.jsonl
+.br
+.B rtlog contract \-\-elf
+.I binary
+.RB [ \-o
+.IR contract.jsonl ]
+.br
+.B rtlog
+.RB [ \-h | \-\-help ]
+.SH DESCRIPTION
+A program that logs with rtlog writes a compact binary stream: a site ID, a
+timestamp delta and the raw arguments per call, never the formatted text. The
+format strings are in a separate
+.IR contract .
+.B rtlog
+joins the two and prints what the program logged.
+.SH COMMANDS
+.TP
+.B decode
+Decode
+.I stream.rtlog
+with the contract the program wrote
+.RB ( rtlog::contract::write ,
+or
+.B rtlog contract
+below). A summary (records, spans, contexts, drops, stream gaps) goes to
+standard error. After a damaged frame decoding resumes at the next resync
+frame and reports a gap. The exit status is non-zero when decoding stopped
+early.
+.TP
+.B check
+Validate a contract and print its number of sites and its hash, the hash the
+stream header carries.
+.TP
+.B contract
+Read the site descriptors from an ELF binary (a Linux program or embedded
+firmware) and write the contract to standard output or to the
+.B \-o
+file. Mach-O and PE binaries are not read: on macOS and Windows the program
+writes its own contract.
+.SH OPTIONS
+.TP
+.BI \-\-contract " file"
+Contract of the program that wrote the stream.
+.TP
+.BR \-\-out " text|json|perfetto"
+Output format; default text.
+.B \-\-json
+and
+.B \-\-perfetto
+are short forms;
+.B chrome
+is accepted for perfetto. Perfetto output opens in https://ui.perfetto.dev.
+.TP
+.BI \-o " file" "\fR, \fP\-\-output " file
+Write to a file instead of standard output.
+.TP
+.BR \-\-color " auto|always|never"
+Colours in text output. auto: on a terminal, unless
+.B NO_COLOR
+is set; never with
+.BR \-o .
+.TP
+.B \-\-no\-spans
+Leave span open and close records out.
+.TP
+.B \-\-force
+Decode even if the stream's contract hash does not match the contract.
+.TP
+.BR \-h ", " \-\-help
+Print the usage, also after a command.
+.SH ENVIRONMENT
+.TP
+.B NO_COLOR
+When set, no colours, even on a terminal.
+.SH EXIT STATUS
+0 on success; 1 on a usage error, an unreadable or invalid file, or a stream
+that stopped decoding early.
+.SH EXAMPLES
+.nf
+rtlog decode \-\-contract app.contract.jsonl app.rtlog
+rtlog decode \-\-contract app.contract.jsonl \-\-perfetto \-o app.json app.rtlog
+rtlog contract \-\-elf firmware.elf \-o firmware.contract.jsonl
+.fi
+.SH SEE ALSO
+https://github.com/NieWil/rtlog, docs/reference.md in the source tree.
