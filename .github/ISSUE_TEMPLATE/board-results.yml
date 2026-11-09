@@ -1,0 +1,42 @@
+name: Share your board's results
+description: Post the timing report from your board, so others can compare.
+title: "Results: <board> (rtlog <version>)"
+labels: ["board-results"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks! Run the demo on your board ([guide](https://github.com/NieWil/rtlog/blob/main/docs/demo.md)) or, from a clone:
+        `cargo run --release -p rtlog-examples --example timing -- --board "Your board" --out timing.md`.
+        A maintainer adds accepted results to `results/<version>/` and the comparison table in `results/README.md`.
+  - type: input
+    id: board
+    attributes:
+      label: Board
+      description: Name and revision, as you would search for it.
+      placeholder: Raspberry Pi 5 Model B Rev 1.0
+    validations:
+      required: true
+  - type: dropdown
+    id: how
+    attributes:
+      label: How did you run it?
+      options:
+        - Prebuilt demo from the releases page (run.sh)
+        - "From a clone: cargo run --release --example timing"
+        - Other (say below)
+    validations:
+      required: true
+  - type: textarea
+    id: report
+    attributes:
+      label: timing.md
+      description: Paste the whole file, unedited. It names the rtlog version, CPU, OS and Rust version.
+      render: markdown
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: Anything that affects the numbers (power mode, governor, cooling, other load, CPU pinning).

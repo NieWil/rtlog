@@ -11,7 +11,10 @@
 //! integer adds runs at one add per cycle on every core this targets, so
 //! timing a long chain gives cycles per nanosecond.
 //!
-//! `cargo run --release -p rtlog-examples --example timing [-- --out report.md]`
+//! `cargo run --release -p rtlog-examples --example timing [-- --out report.md] [--board NAME]`
+//!
+//! The report starts with what was measured: board, CPU, OS, rtlog and Rust
+//! versions. Share it in `results/` (see CONTRIBUTING.md).
 
 use std::fmt::Write as _;
 use std::hint::black_box;
@@ -176,6 +179,76 @@ fn cpu_model() -> String {
     std::env::var("PROCESSOR_IDENTIFIER").unwrap_or_else(|_| "unknown".to_owned())
 }
 
+/// Value of `--name VALUE` on the command line.
+fn arg(name: &str) -> Option<String> {
+    std::env::args().skip_while(|a| a != name).nth(1)
+}
+
+/// The board: `--board`, else `RTLOG_BOARD`, else what the system reports
+/// (the device-tree model on Raspberry Pi and other Arm boards, the DMI
+/// product name on PCs and VMs).
+fn board_name() -> String {
+    if let Some(b) = arg("--board").or_else(|| std::env::var("RTLOG_BOARD").ok()) {
+        if !b.trim().is_empty() {
+            return b.trim().to_owned();
+        }
+    }
+    for path in [
+        "/proc/device-tree/model",
+        "/sys/firmware/devicetree/base/model",
+        "/sys/devices/virtual/dmi/id/product_name",
+    ] {
+        if let Ok(s) = std::fs::read_to_string(path) {
+            let s = s.trim_matches(|c: char| c == '\0' || c.is_whitespace());
+            if !s.is_empty() {
+                return s.to_owned();
+            }
+        }
+    }
+    if let Ok(out) = std::process::Command::new("sysctl")
+        .args(["-n", "hw.model"])
+        .output()
+    {
+        let s = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+        if !s.is_empty() {
+            return s;
+        }
+    }
+    "unknown (pass --board NAME)".to_owned()
+}
+
+/// Operating system name, version and kernel, as far as it can be read.
+fn os_name() -> String {
+    let run = |cmd: &str, args: &[&str]| {
+        std::process::Command::new(cmd)
+            .args(args)
+            .output()
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+            .filter(|s| !s.is_empty())
+    };
+    match std::env::consts::OS {
+        "linux" => {
+            let distro = std::fs::read_to_string("/etc/os-release")
+                .ok()
+                .and_then(|s| {
+                    s.lines()
+                        .find_map(|l| l.strip_prefix("PRETTY_NAME="))
+                        .map(|v| v.trim_matches('"').to_owned())
+                })
+                .unwrap_or_else(|| "Linux".to_owned());
+            match run("uname", &["-r"]) {
+                Some(k) => format!("{distro}, kernel {k}"),
+                None => distro,
+            }
+        }
+        "macos" => run("sw_vers", &["-productVersion"])
+            .map_or_else(|| "macOS".to_owned(), |v| format!("macOS {v}")),
+        "windows" => run("cmd", &["/c", "ver"]).unwrap_or_else(|| "Windows".to_owned()),
+        other => other.to_owned(),
+    }
+}
+
 /// Transport that discards frames, so the report times the logger, not I/O.
 struct Discard;
 
@@ -196,7 +269,7 @@ fn row(out: &mut String, ghz: Option<f64>, name: &str, what: &str, s: &Stat) {
 }
 
 fn main() {
-    let out_path = std::env::args().skip_while(|a| a != "--out").nth(1);
+    let out_path = arg("--out");
     let drops_before = rtlog::stats().drops;
     let mut d = rtlog::Drain::new(Discard);
     let mut drain = || {
@@ -207,7 +280,11 @@ fn main() {
     let mut r = String::new();
     writeln!(r, "## rtlog timing report\n").unwrap();
     writeln!(r, "| Platform | |\n| --- | --- |").unwrap();
+    writeln!(r, "| Board | {} |", board_name().replace('|', "/")).unwrap();
     writeln!(r, "| CPU | {} |", cpu_model()).unwrap();
+    writeln!(r, "| OS | {} |", os_name().replace('|', "/")).unwrap();
+    writeln!(r, "| rtlog | {} |", env!("CARGO_PKG_VERSION")).unwrap();
+    writeln!(r, "| Rust | {} |", env!("RTLOG_EXAMPLES_RUSTC")).unwrap();
     writeln!(
         r,
         "| Measured core clock | {} |",

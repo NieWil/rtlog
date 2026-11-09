@@ -54,6 +54,8 @@ jobs:
         run: actionlint
       - name: Shell scripts
         run: shellcheck scripts/*.sh scripts/demo/*.sh
+      - name: Board results (format, and results/README.md up to date)
+        run: python3 scripts/results.py --check
       - name: C/C++ header (clang-tidy)
         run: |
           sudo apt-get install -y -qq clang-tidy >/dev/null
