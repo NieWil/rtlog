@@ -438,7 +438,10 @@ static void rtlog__key_dtor(void *p) {
 static void rtlog__key_make(void) { rtlog__key_ok = pthread_key_create(&rtlog__key, rtlog__key_dtor) == 0; }
 #endif
 
-static struct rtlog__ring *rtlog__claim(void) {
+/* Claim a ring slot for the calling thread, named `name` (NULL: "thread-<ctx>").
+ * The name is set before the slot goes live, so the drain's first
+ * announcement of the context already carries it. */
+static struct rtlog__ring *rtlog__claim_as(const char *name) {
     if (rtlog__mine) return rtlog__mine;
     for (int i = 0; i < RTLOG_MAX_THREADS; i++) {
         struct rtlog__ring *r = &rtlog__rings[i];
@@ -451,17 +454,21 @@ static struct rtlog__ring *rtlog__claim(void) {
             r->sync_pending = 0;
             r->span_seq = 0;
             r->current_span = 0;
-            char name[24] = "thread-";
-            uint8_t digits[10];
-            size_t nd = 0, pos = 7;
-            uint32_t c = r->ctx;
-            do {
-                digits[nd++] = (uint8_t)('0' + c % 10);
-                c /= 10;
-            } while (c);
-            while (nd) name[pos++] = (char)digits[--nd];
-            name[pos] = 0;
-            rtlog__set_name(r, name);
+            if (name) {
+                rtlog__set_name(r, name);
+            } else {
+                char deflt[24] = "thread-";
+                uint8_t digits[10];
+                size_t nd = 0, pos = 7;
+                uint32_t c = r->ctx;
+                do {
+                    digits[nd++] = (uint8_t)('0' + c % 10);
+                    c /= 10;
+                } while (c);
+                while (nd) deflt[pos++] = (char)digits[--nd];
+                deflt[pos] = 0;
+                rtlog__set_name(r, deflt);
+            }
             __atomic_store_n(&r->announced, 0, __ATOMIC_RELAXED);
             __atomic_store_n(&r->state, RTLOG__LIVE, __ATOMIC_RELEASE);
             rtlog__mine = r;
@@ -475,9 +482,16 @@ static struct rtlog__ring *rtlog__claim(void) {
     return 0;
 }
 
+static struct rtlog__ring *rtlog__claim(void) { return rtlog__claim_as(0); }
+
 void rtlog_set_thread_name(const char *name) {
-    struct rtlog__ring *r = rtlog__claim();
-    if (!r) return;
+    if (!rtlog__mine) {
+        /* First use on this thread: claim the slot under this name, so the
+         * drain never announces it as "thread-<ctx>" first. */
+        (void)rtlog__claim_as(name);
+        return;
+    }
+    struct rtlog__ring *r = rtlog__mine;
     rtlog__set_name(r, name);
     __atomic_store_n(&r->announced, 0, __ATOMIC_RELEASE);
 }
