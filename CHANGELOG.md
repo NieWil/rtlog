@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## v0.2.4 — crash dumps on every thread, quality gates, board results
+
+Crash dumps of debug builds are complete whichever thread crashes (x86-64 and aarch64); CI enforces coverage, dependency, spelling, workflow and C static checks; users can share timing results from their boards.
 
 - `cargo doc --workspace` no longer races: the `rtlog` CLI binary's docs (`doc = false`) went to the same `target/doc/rtlog/` directory as the `rtlog` library's (cargo issue 6313), which failed the docs check now and then.
 - **Board results:** the timing report starts with the board, OS, rtlog and Rust versions (`--board NAME` or `RTLOG_BOARD`; otherwise the device-tree or DMI model). Users share it in `results/<version>/<board>.md` by pull request, or with the new board-results issue form. Microcontroller results come from the Zephyr benchmark firmware through `scripts/results.py mcu`; the first entry is the STM32 NUCLEO-L432KC measurement (v0.2.2). `scripts/results.py` checks each file and regenerates the comparison table in `results/README.md`, and CI runs it.
