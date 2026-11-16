@@ -37,7 +37,7 @@ C and C++: `rtlog_set_level(RTLOG_LEVEL_WARN)` with `RTLOG_LEVEL_TRACE` … `RTL
 | Drain | `rtlog::spawn_drain(transport, period)` thread, or `rtlog::Drain::new(t).poll()` where you choose | `rtlog::drain::drain_ring(&mut consumer, &mut transport, &mut scratch)` from your idle loop or a DMA callback, after `drain::write_header` |
 | Clock | CPU counter or `Instant` | `rtlog::set_clock(now_fn, hz)` |
 | Contract | `rtlog::contract::write(path)` at startup, or `rtlog contract --elf` | `rtlog contract --elf firmware.elf` |
-| Crash dump | `rtlog::crash::install(dir)` on Unix | not yet ([roadmap](roadmap.md)) |
+| Crash dump | `rtlog::crash::install(dir)` on Unix and Windows | not yet ([roadmap](roadmap.md)) |
 
 Other runtime calls (`std`): `rtlog::set_context_name("motor")` names the calling thread's context in the output; `rtlog::stats()` returns live contexts and drop counts; `rtlog::set_clock(now, hz)` installs your own clock.
 

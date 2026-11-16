@@ -19,7 +19,7 @@ This file tracks how the code in `crates/` matches [the specification](spec.md):
 | Verification: soak test, Miri, ThreadSanitizer, AddressSanitizer | Built | `tests/soak.rs`, CI jobs `miri`, `sanitizers`, `soak` |
 | 4 Contract from the image (`cargo rtlog contract`) | Built as `rtlog contract --elf`, for Rust and C descriptors, PIE relocations applied | `rtlog-decode/src/elf.rs` |
 | 8b Debug stdout, crash log (Unix; C on POSIX) | Built: one numbered file per dump, rings read without waiting for the drain | `rtlog_decode::stdout`, `rtlog::crash`, `rtlog_crash_install` |
-| C / C++ producer, Zephyr module | Built (Zephyr not CI-built) | `c/include/rtlog.h`, `c/zephyr`, `zephyr/module.yml` |
+| C / C++ producer, Zephyr module | Built (Zephyr sample run on `qemu_cortex_m3` in CI) | `c/include/rtlog.h`, `c/zephyr`, `zephyr/module.yml` |
 | 10c Benchmarks in cycles, size on Cortex-M4F | Built | `examples/timing.rs`, `size/mcu`, `scripts/size_report.py` |
 | 5 compression, AEAD; 8b MCU crash capture; 10 `log` / `tracing` / `defmt` bridges and OTLP / CTF outputs; shared memory; contract stripping | Not yet | [Roadmap](roadmap.md) |
 

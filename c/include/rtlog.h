@@ -416,11 +416,17 @@ struct rtlog__ring {
     uint8_t buf[RTLOG_RING_SIZE];
 };
 
+/* Descriptors from address `a` up to `b`. Integer arithmetic: to the compiler
+ * the linker's section bounds and a descriptor are different objects, and ISO C
+ * leaves the difference of pointers into different objects undefined. */
+#define RTLOG__SITES_BETWEEN(a, b) \
+    ((uint32_t)(((uintptr_t)(b) - (uintptr_t)(a)) / sizeof(struct rtlog_site)))
+
 #if defined(__APPLE__)
 extern const struct rtlog_site rtlog__sites_start[] __asm("section$start$__DATA$rtlog_sites");
 extern const struct rtlog_site rtlog__sites_stop[] __asm("section$end$__DATA$rtlog_sites");
 #define RTLOG__SITES_START rtlog__sites_start
-#define RTLOG__SITES_COUNT ((uint32_t)(rtlog__sites_stop - rtlog__sites_start))
+#define RTLOG__SITES_COUNT RTLOG__SITES_BETWEEN(rtlog__sites_start, rtlog__sites_stop)
 #elif defined(_WIN32)
 /* All-zero descriptors before and after the real ones; the host skips them. */
 static const struct rtlog_site rtlog__pe_start
@@ -428,13 +434,13 @@ static const struct rtlog_site rtlog__pe_start
 static const struct rtlog_site rtlog__pe_stop
     __attribute__((section("rtlog$z"), used, aligned(sizeof(void *)))) = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 #define RTLOG__SITES_START (&rtlog__pe_start + 1)
-#define RTLOG__SITES_COUNT ((uint32_t)(&rtlog__pe_stop - (&rtlog__pe_start + 1)))
+#define RTLOG__SITES_COUNT RTLOG__SITES_BETWEEN(&rtlog__pe_start + 1, &rtlog__pe_stop)
 #else
 extern const struct rtlog_site __start_rtlog_sites[] __attribute__((weak));
 extern const struct rtlog_site __stop_rtlog_sites[] __attribute__((weak));
 #define RTLOG__SITES_START __start_rtlog_sites
 #define RTLOG__SITES_COUNT \
-    (__start_rtlog_sites ? (uint32_t)(__stop_rtlog_sites - __start_rtlog_sites) : 0)
+    (__start_rtlog_sites ? RTLOG__SITES_BETWEEN(__start_rtlog_sites, __stop_rtlog_sites) : 0)
 #endif
 
 int rtlog__level = RTLOG_LEVEL_TRACE;
@@ -630,7 +636,7 @@ static int rtlog__push_raw(struct rtlog__ring *r, uint32_t site, const uint8_t *
 }
 
 static uint32_t rtlog__site_id(const struct rtlog_site *s) {
-    return (uint32_t)(s - RTLOG__SITES_START) + 1;
+    return RTLOG__SITES_BETWEEN(RTLOG__SITES_START, s) + 1;
 }
 
 void rtlog_push(const struct rtlog_site *site, const rtlog_writer *w) {
