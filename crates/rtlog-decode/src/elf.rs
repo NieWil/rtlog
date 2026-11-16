@@ -8,7 +8,12 @@
 //!   as (pointer, length) pairs. The ID is stored.
 //! - C / C++ (from `rtlog.h`): `magic` "RTLS", `line`, `level`, `nargs`,
 //!   `kind`, reserved bytes, then `fmt`, `file`, `func` as NUL-terminated
-//!   string pointers. The ID is the entry's index + 1.
+//!   string pointers (`func` is null in a build with `RTLOG_STRIP`). The ID
+//!   is the entry's index + 1.
+//!
+//! A build made to be stripped (the `strip` feature, `RTLOG_STRIP`) keeps the
+//! strings in an `rtlog_strs` section and both sections out of the loaded
+//! image; they are read here the same way, from the ELF file the linker wrote.
 //!
 //! Where the descriptors are:
 //!
@@ -78,6 +83,9 @@ struct Image<'d> {
     /// Address the image is linked at (Mach-O: its `__TEXT` segment).
     base: u64,
 }
+
+/// Section of the strings of descriptors built to be stripped.
+const STRINGS_SECTION: &str = "rtlog_strs";
 
 /// Low 36 bits of a Mach-O chained-fixup rebase: the target, as an address
 /// (`DYLD_CHAINED_PTR_64`) or as an offset from the image base
@@ -199,8 +207,24 @@ impl<'d> Image<'d> {
     }
 
     /// `len` bytes at virtual address `addr`, from whichever section holds them.
+    ///
+    /// `rtlog_strs` is looked at first. It holds the strings of a build that
+    /// keeps them out of the loaded image (the `strip` feature, `RTLOG_STRIP`),
+    /// and a linker may give such non-loaded sections overlapping addresses
+    /// (LLD starts each of them at 0), so address alone does not say which
+    /// section a string pointer means.
     fn bytes_at(&self, addr: u64, len: Option<usize>) -> Option<&'d [u8]> {
-        for s in self.file.sections() {
+        let strs = self.file.section_by_name(STRINGS_SECTION);
+        // Otherwise only sections of the loaded image: an ELF file's other
+        // sections (symbol and string tables, debug data) have address 0 and
+        // would give a null or small bogus pointer something to point at.
+        let loaded = |s: &object::Section<'d, '_>| match s.flags() {
+            object::SectionFlags::Elf { sh_flags } => {
+                sh_flags & u64::from(object::elf::SHF_ALLOC) != 0
+            }
+            _ => true,
+        };
+        for s in strs.into_iter().chain(self.file.sections().filter(loaded)) {
             let (start, size) = (s.address(), s.size());
             if addr < start || addr >= start + size {
                 continue;
@@ -442,6 +466,11 @@ fn contract_of(img: Image<'_>) -> Result<String, ElfError> {
                     let p = img
                         .pointer(e, off, at(off))
                         .ok_or_else(|| bad("truncated"))?;
+                    // A build with RTLOG_STRIP records no function name.
+                    if p == 0 && *what == "func" {
+                        strs.push(String::new());
+                        continue;
+                    }
                     strs.push(img.string(p, None, what, i)?);
                 }
                 // The index counts from the start marker on PE, which is entry 0.
@@ -1222,5 +1251,54 @@ mod tests {
         // A WebAssembly module header.
         let e = contract_from_binary(b"\0asm\x01\0\0\0").unwrap_err();
         assert!(matches!(e, ElfError::Parse(_)), "{e:?}");
+    }
+
+    // ---- builds made to be stripped --------------------------------------
+
+    #[test]
+    fn stripped_rust_strings_are_read_from_rtlog_strs_at_overlapping_addresses() {
+        // LLD starts every non-loaded section at address 0: the descriptors
+        // and their strings overlap, and a string pointer is an offset into
+        // rtlog_strs.
+        let site = rust_site(4, 2, [(0, 3), (4, 11), (16, 4)]);
+        let img = image(
+            false,
+            true,
+            EM_ARM,
+            &[
+                sec("linkme_SITES", 0, site),
+                sec("rtlog_strs", 0, STRS.to_vec()),
+            ],
+        );
+        assert_eq!(contract_from_elf(&img).unwrap(), format!("{RUST_LINE}\n"));
+    }
+
+    #[test]
+    fn stripped_c_site_has_no_function_name() {
+        // RTLOG_STRIP: fmt and file in rtlog_strs, func null.
+        let strs = 0x4_0070;
+        let img = image(
+            true,
+            true,
+            EM_X86_64,
+            &[
+                sec(
+                    "rtlog_sites",
+                    0x4_0000,
+                    c_site(b"RTLS", 2, 0, [strs + 16, strs + 4, 0]),
+                ),
+                sec("rtlog_strs", strs, STRS.to_vec()),
+            ],
+        );
+        assert_eq!(
+            contract_from_elf(&img).unwrap(),
+            "{\"id\":1,\"level\":\"info\",\"module\":\"\",\"file\":\"src/main.rs\",\"line\":42,\"column\":0,\"fmt\":\"x={}\",\"nargs\":1}\n"
+        );
+        // A null format string is still an error.
+        let img = c_image(c_site(b"RTLS", 2, 0, [0, RODATA + 4, 0]));
+        assert!(matches!(
+            contract_from_elf(&img),
+            Err(ElfError::BadEntry { index: 0, .. })
+        ));
     }
 }

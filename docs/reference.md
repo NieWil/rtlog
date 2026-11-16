@@ -39,6 +39,8 @@ C and C++: `rtlog_set_level(RTLOG_LEVEL_WARN)` with `RTLOG_LEVEL_TRACE` … `RTL
 | Contract | `rtlog::contract::write(path)` at startup, or `rtlog contract --elf` | `rtlog contract --elf firmware.elf` |
 | Crash dump | `rtlog::crash::install(dir)` on Unix and Windows | not yet ([roadmap](roadmap.md)) |
 
+The `strip` feature (with or without `std`, ELF targets) keeps descriptors and format strings out of the shipped image; the contract then comes from `rtlog contract --elf` only. See [Ship without the format strings](strip.md).
+
 Other runtime calls (`std`): `rtlog::set_context_name("motor")` names the calling thread's context in the output; `rtlog::stats()` returns live contexts and drop counts; `rtlog::set_clock(now, hz)` installs your own clock.
 
 ## The `rtlog` command
@@ -77,6 +79,14 @@ rtlog contract --elf <binary> [-o <contract.jsonl>]
 ```
 
 Reads the site descriptors from the binary that was built and writes the contract: **ELF** (Linux programs, embedded firmware), **Mach-O** (macOS; of a universal binary, the first architecture) or **PE** (Windows `.exe` and `.dll`). `--binary` is another spelling of `--elf`. Rust and C/C++ sites are both read. A Rust program can instead call `rtlog::contract::write(path)` at startup.
+
+### `rtlog verify`
+
+```text
+rtlog verify --contract <contract.jsonl> <image>...
+```
+
+Checks an image that ships (a flashed `.bin`, an executable after `objcopy`) against the contract of its build: exits with an error if the image contains a format string or span name of the contract, and names each one found. Strings shorter than 6 bytes are not searched for. Use it as a release gate for [stripped builds](strip.md).
 
 ## JSON lines output
 

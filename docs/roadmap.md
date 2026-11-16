@@ -14,7 +14,8 @@ What rtlog does not do yet. The [specification](spec.md) describes only what is 
 
 ## 4. Contract and site IDs
 
-- Stripping the descriptor section from shipped images (`cargo rtlog verify` as a release gate) so format strings leave the binary. Until then, binaries are self-describing and threat V2 is open.
+- Stripping for Mach-O and PE binaries, and for Linux programs linked with LLD (built: ELF firmware with either linker, Linux programs with GNU ld; [guide](strip.md)).
+- A contract hash in the header of a stripped Rust build (today 0, "not stated"): patch it into the image after linking, or keep the 4-byte IDs loaded.
 - A build-time collision check across the whole program (today a unit test checks the crate's own sites).
 - `elf16`: linker-assigned 16-bit IDs for single-image MCU builds (header `scheme = 1`, reserved).
 - Argument types in the site hash, once a proc-macro can see them.
@@ -73,7 +74,6 @@ Host-side outputs beyond text, JSON lines and Perfetto: syslog / journald, OpenT
 
 | # | Threat | Blocked on |
 | --- | --- | --- |
-| V2 | Unstripped descriptor section ships format strings | stripping and `cargo rtlog verify` (section 4) |
 | V3, V4 | Capture on an untrusted transport; tampering in archives | AEAD blocks (section 5) |
 | V7 | Sensitive values in typed args | `#[rtlog(redact)]` and the lint (section 6) |
 | V8 | Nonce reuse after reset | boot counter in the AEAD design (section 5) |
@@ -90,7 +90,7 @@ Host-side outputs beyond text, JSON lines and Perfetto: syslog / journald, OpenT
 ## Release plan
 
 1. **v0.3**: `derive(Log)` and the `Display` escape hatch; the `log` bridge; inline-capture support or a `{name}` rewrite; `--follow`.
-2. **v0.4**: `tracing` bridge; per-module levels; contract store by hash; stripping and `cargo rtlog verify`; `DropOldest`.
+2. **v0.4**: `tracing` bridge; per-module levels; contract store by hash; `DropOldest`.
 3. **v0.5**: MCU crash capture; UDP and shared-memory transports; `elf16` IDs; Cortex-M cycle test on hardware.
 4. **v1.0**: wire format frozen, contract schema versioned, bench suite published with a hardware-measured Cortex-M budget.
 

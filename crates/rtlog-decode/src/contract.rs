@@ -244,6 +244,47 @@ impl Contract {
     pub fn is_empty(&self) -> bool {
         self.sites.is_empty()
     }
+
+    /// Every site, in ascending ID order.
+    pub fn sites(&self) -> Vec<&SiteInfo> {
+        let mut all: Vec<&SiteInfo> = self.sites.values().collect();
+        all.sort_by_key(|s| s.id);
+        all
+    }
+
+    /// Check that an image built to be stripped ships none of this contract's
+    /// format strings and span names: search the bytes of `image` (a flashed
+    /// `.bin`, a stripped executable) for each of them.
+    ///
+    /// Strings shorter than [`VERIFY_MIN_LEN`] bytes are not searched for: a
+    /// few bytes such as `x={}` occur in unrelated data by chance.
+    pub fn verify_stripped(&self, image: &[u8]) -> Stripped<'_> {
+        let mut out = Stripped::default();
+        for site in self.sites() {
+            if site.fmt.len() < VERIFY_MIN_LEN {
+                out.skipped += 1;
+            } else if memchr::memmem::find(image, site.fmt.as_bytes()).is_some() {
+                out.found.push(site);
+            } else {
+                out.absent += 1;
+            }
+        }
+        out
+    }
+}
+
+/// Shortest format string [`Contract::verify_stripped`] searches an image for.
+pub const VERIFY_MIN_LEN: usize = 6;
+
+/// What [`Contract::verify_stripped`] found.
+#[derive(Debug, Default)]
+pub struct Stripped<'c> {
+    /// Sites whose format string or span name is in the image.
+    pub found: Vec<&'c SiteInfo>,
+    /// Sites whose string was searched for and is not in the image.
+    pub absent: usize,
+    /// Sites not searched for: their string is shorter than [`VERIFY_MIN_LEN`].
+    pub skipped: usize,
 }
 
 #[cfg(test)]
@@ -421,5 +462,35 @@ mod tests {
         let c = Contract::from_jsonl(&format!("{span}\n{log}")).unwrap();
         assert_eq!(c.site(7).unwrap().kind, Kind::Span);
         assert_eq!(c.site(8).unwrap().kind, Kind::Log);
+    }
+
+    #[test]
+    fn verify_stripped_finds_the_strings_an_image_still_holds() {
+        let line = |id: u32, fmt: &str| {
+            format!(
+                r#"{{"id":{id},"level":"info","module":"m","file":"f.rs","line":1,"column":1,"fmt":"{fmt}","nargs":0}}"#
+            )
+        };
+        let text = [
+            line(3, "motor fault code"),
+            line(1, "adc channel raw"),
+            line(2, "ok"),
+        ]
+        .join("\n");
+        let c = Contract::from_jsonl(&text).unwrap();
+        assert_eq!(
+            c.sites().iter().map(|s| s.id).collect::<Vec<_>>(),
+            [1, 2, 3]
+        );
+
+        let clean = c.verify_stripped(b"\x7fELF code and data, no log text; ok");
+        assert!(clean.found.is_empty());
+        // "ok" is too short to mean anything, although it is in the image.
+        assert_eq!((clean.absent, clean.skipped), (2, 1));
+
+        let leaky = c.verify_stripped(b"\0\0motor fault code\0");
+        assert_eq!(leaky.found.len(), 1);
+        assert_eq!(leaky.found[0].id, 3);
+        assert_eq!((leaky.absent, leaky.skipped), (1, 1));
     }
 }

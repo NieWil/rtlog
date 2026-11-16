@@ -16,6 +16,18 @@ config RTLOG_RING_SIZE
 	int "Ring size per thread in bytes (power of two)"
 	default 2048
 
+config RTLOG_STRIP
+	bool "Keep format strings out of the firmware image"
+	depends on LINKER_DEVNULL_SUPPORT
+	select LINKER_DEVNULL_MEMORY
+	help
+	  Place the call-site descriptors and their format strings in a
+	  region that is not part of zephyr.bin or zephyr.hex. They stay in
+	  zephyr.elf, where `rtlog contract --elf` reads them. Saves the
+	  descriptors (28 bytes per call site on a 32-bit target) and the
+	  strings, and the shipped image no longer contains the log texts.
+	  Function names are not recorded.
+
 config RTLOG_DRAIN_THREAD
 	bool "Run a low-priority drain thread"
 	default y

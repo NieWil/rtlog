@@ -268,7 +268,9 @@ impl<'c> Session<'c> {
         if header.wire_version != wire::WIRE_VERSION {
             return Err(DecodeError::WireVersion(header.wire_version));
         }
-        let mismatched = header.contract_hash != contract.hash();
+        // Hash 0: the producer did not state its contract (it is built with
+        // descriptors stripped from the image, so it cannot hash them).
+        let mismatched = header.contract_hash != 0 && header.contract_hash != contract.hash();
         if mismatched && !force {
             return Err(DecodeError::ContractMismatch {
                 stream: header.contract_hash,
@@ -678,5 +680,20 @@ mod tests {
         assert!(crash(0xC000_0094, 0)
             .describe()
             .ends_with("(exception 0xc0000094) pc=0x7ff600001234"));
+    }
+
+    #[test]
+    fn a_header_without_a_contract_hash_is_accepted() {
+        // A producer built with its descriptors stripped writes hash 0.
+        let c = contract();
+        let h = Header::new(0, 1_000_000_000).encode();
+        let s = Session::new(&c, &h, false).unwrap();
+        assert!(!s.mismatched);
+        // Any other hash that is not the contract's is still a mismatch.
+        let h = Header::new(c.hash() ^ 1, 1_000_000_000).encode();
+        assert!(matches!(
+            Session::new(&c, &h, false),
+            Err(DecodeError::ContractMismatch { .. })
+        ));
     }
 }

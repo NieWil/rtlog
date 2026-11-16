@@ -98,4 +98,13 @@ records=${summary%% records,*}
 "$SIZE" -A "$ELF" | grep -E '^(section|text|rodata|rtlog_[a-z_]*|log_strings) '
 bin=$(stat -c %s "$OUT/zephyr/zephyr.bin")
 sites=$("$SIZE" -A "$ELF" | awk '$1 == "rtlog_sites" {print $2}')
-echo "Zephyr QEMU end-to-end OK ($NAME, ${SECS} s): $summary; zephyr.bin $bin bytes, rtlog_sites $sites bytes"
+# What is flashed holds every format string, or with CONFIG_RTLOG_STRIP=y none.
+stripped="format strings in zephyr.bin"
+if grep -q '^CONFIG_RTLOG_STRIP=y' "$OUT/zephyr/.config"; then
+  "$RTLOG" verify --contract "$OUT/app.contract.jsonl" "$OUT/zephyr/zephyr.bin" > "$OUT/verify.txt" 2>&1 \
+    || { cat "$OUT/verify.txt"; exit 1; }
+  stripped="stripped: no format string in zephyr.bin"
+elif "$RTLOG" verify --contract "$OUT/app.contract.jsonl" "$OUT/zephyr/zephyr.bin" > "$OUT/verify.txt" 2>&1; then
+  echo "verify passed on an image that is not stripped"; cat "$OUT/verify.txt"; exit 1
+fi
+echo "Zephyr QEMU end-to-end OK ($NAME, ${SECS} s): $summary; zephyr.bin $bin bytes, rtlog_sites $sites bytes, $stripped"

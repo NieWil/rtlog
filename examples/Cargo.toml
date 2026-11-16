@@ -5,6 +5,10 @@ edition.workspace = true
 license.workspace = true
 publish = false
 
+[features]
+# Build the examples with rtlog's `strip` feature (see stripped.rs).
+strip = ["rtlog/strip"]
+
 [dependencies]
 rtlog = { path = "../crates/rtlog" }
 rtlog-decode = { path = "../crates/rtlog-decode" }
@@ -32,3 +36,7 @@ path = "perfetto_quickstart.rs"
 [[example]]
 name = "stdout_mode"
 path = "stdout_mode.rs"
+
+[[example]]
+name = "stripped"
+path = "stripped.rs"

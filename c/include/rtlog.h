@@ -24,7 +24,10 @@
  * `_Thread_local`) or C++11. Targets: Linux and other ELF systems, Zephyr,
  * bare metal, macOS, Windows.
  * Configuration (define before including): RTLOG_MAX_THREADS (16),
- * RTLOG_RING_SIZE (16384, power of two).
+ * RTLOG_RING_SIZE (16384, power of two), RTLOG_STRIP (ELF only: format
+ * strings and file names go into their own `rtlog_strs` section, which a
+ * linker script keeps out of the loaded image together with `rtlog_sites`;
+ * function names are then not recorded. See docs/strip.md).
  */
 #ifndef RTLOG_H
 #define RTLOG_H
@@ -197,6 +200,24 @@ static inline void rtlog__str(rtlog_writer *w, const char *s) {
 #define RTLOG__SECTION_NAME "rtlog_sites"
 #endif
 #define RTLOG__SECTION __attribute__((section(RTLOG__SECTION_NAME), used, aligned(sizeof(void *))))
+#ifdef RTLOG_STRIP
+#if defined(__APPLE__) || defined(_WIN32)
+#error "RTLOG_STRIP needs an ELF target: the linker script keeps the sections out of the image"
+#endif
+/* The strings are objects of their own section, not literals in .rodata, so
+ * the linker can leave them out of the image with the descriptors. __func__
+ * is a variable of the enclosing function and cannot be placed: not recorded. */
+#define RTLOG__STRS __attribute__((section("rtlog_strs"), used, aligned(1)))
+#define RTLOG__SITE(lvl, kind_, fmt_, n)                                                       \
+    __extension__({                                                                            \
+        static const char rtlog__fmt_[] RTLOG__STRS = fmt_;                                    \
+        static const char rtlog__file_[] RTLOG__STRS = __FILE__;                               \
+        static const struct rtlog_site rtlog__site_ RTLOG__SECTION = {                        \
+            0x534c5452u, __LINE__, (uint8_t)(lvl), (uint8_t)(n), (uint8_t)(kind_), 0, 0,       \
+            rtlog__fmt_, rtlog__file_, 0};                                                     \
+        &rtlog__site_;                                                                         \
+    })
+#else
 #define RTLOG__SITE(lvl, kind_, fmt_, n)                                                       \
     __extension__({                                                                            \
         static const struct rtlog_site rtlog__site_ RTLOG__SECTION = {                        \
@@ -204,6 +225,7 @@ static inline void rtlog__str(rtlog_writer *w, const char *s) {
             fmt_, __FILE__, __func__};                                                         \
         &rtlog__site_;                                                                         \
     })
+#endif
 
 /* ---- argument counting and expansion (up to 16 arguments) --------------- */
 

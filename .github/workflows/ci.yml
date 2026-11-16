@@ -185,6 +185,9 @@ jobs:
           target/debug/rtlog decode --contract "$out/demo_cpp.contract.jsonl" "$out/demo_cpp.rtlog" > "$out/demo_cpp.txt"
           grep -q "INFO    request id=0 route=/health" "$out/demo_cpp.txt"
           grep -q "WARN  shutdown pending=0 ok=true" "$out/demo_cpp.txt"
+      - name: Stripped builds (Rust strip feature, C RTLOG_STRIP), GNU ld
+        if: matrix.cc == 'gcc' && runner.os == 'Linux'
+        run: scripts/strip_e2e.sh gcc
       - name: ThreadSanitizer and AddressSanitizer on the C demo
         if: matrix.cc == 'gcc' && runner.os == 'Linux'
         run: |
@@ -244,6 +247,10 @@ jobs:
       - run: pip install -q -r /opt/zephyrproject/zephyr/scripts/requirements-base.txt
       - name: Build, run in QEMU, read the contract from zephyr.elf, decode
         run: QEMU=qemu-system-arm scripts/zephyr_qemu.sh | tee zephyr-qemu.md
+      - name: The same with CONFIG_RTLOG_STRIP=y (no format string in zephyr.bin)
+        run: >
+          QEMU=qemu-system-arm RTLOG_QEMU_NAME=hello-strip
+          scripts/zephyr_qemu.sh -DCONFIG_RTLOG_STRIP=y | tee -a zephyr-qemu.md
       - run: cat zephyr-qemu.md >> "$GITHUB_STEP_SUMMARY"
 
   coverage:

@@ -16,6 +16,10 @@
 //!   thread, `contract`, and on Unix and Windows the `crash` handler.
 //! - `default-features = false`: `no_std`, no allocation; static [`Ring`]s and
 //!   explicit producers (`info!(to: &mut producer, ...)`).
+//! - Feature `strip`: descriptors and format strings go into two sections
+//!   (`linkme_SITES`, `rtlog_strs`) that a linker script keeps out of the
+//!   loaded image, so they cost no flash and do not ship; see the
+//!   [stripping guide](https://github.com/NieWil/rtlog/blob/main/docs/strip.md).
 //!
 //! Guides: [getting started](https://github.com/NieWil/rtlog#try-it),
 //! [configuration and CLI](https://github.com/NieWil/rtlog/blob/main/docs/reference.md),
@@ -110,10 +114,72 @@ pub mod __private {
         crate::runtime::__local_emit(site, encode)
     }
 
+    /// The bytes of `s` as an array, for a `static` in the `rtlog_strs`
+    /// section (`strip` feature). `N` is `s.len()`.
+    pub const fn bytes<const N: usize>(s: &str) -> [u8; N] {
+        let b = s.as_bytes();
+        assert!(b.len() == N);
+        let mut out = [0u8; N];
+        let mut i = 0;
+        while i < N {
+            out[i] = b[i];
+            i += 1;
+        }
+        out
+    }
+
+    /// The string that [`bytes`] stored.
+    pub const fn text(b: &'static [u8]) -> &'static str {
+        match core::str::from_utf8(b) {
+            Ok(s) => s,
+            Err(_) => panic!("rtlog: site string is not UTF-8"),
+        }
+    }
+
     pub const fn nargs(n: usize) -> u8 {
         assert!(n <= 32, "rtlog: at most 32 arguments per call");
         n as u8
     }
+}
+
+/// The descriptor `static` of one site, collected into `SITES`.
+#[cfg(not(feature = "strip"))]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __site_static {
+    ($site:ident) => {
+        #[$crate::__private::linkme::distributed_slice($crate::site::SITES)]
+        #[linkme(crate = $crate::__private::linkme)]
+        static __RTLOG_SITE: $crate::Site = $site;
+    };
+}
+
+/// The descriptor `static` of one site, collected into `SITES`. With the
+/// `strip` feature its strings are statics of the `rtlog_strs` section, not
+/// read-only data shared with the rest of the program, so that a linker
+/// script can keep descriptors and strings out of the loaded image.
+#[cfg(feature = "strip")]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __site_static {
+    ($site:ident) => {
+        #[cfg_attr(target_vendor = "apple", link_section = "__DATA,rtlog_strs")]
+        #[cfg_attr(not(target_vendor = "apple"), link_section = "rtlog_strs")]
+        static __RTLOG_MODULE: [u8; $site.module.len()] = $crate::__private::bytes($site.module);
+        #[cfg_attr(target_vendor = "apple", link_section = "__DATA,rtlog_strs")]
+        #[cfg_attr(not(target_vendor = "apple"), link_section = "rtlog_strs")]
+        static __RTLOG_FILE: [u8; $site.file.len()] = $crate::__private::bytes($site.file);
+        #[cfg_attr(target_vendor = "apple", link_section = "__DATA,rtlog_strs")]
+        #[cfg_attr(not(target_vendor = "apple"), link_section = "rtlog_strs")]
+        static __RTLOG_FMT: [u8; $site.fmt.len()] = $crate::__private::bytes($site.fmt);
+        #[$crate::__private::linkme::distributed_slice($crate::site::SITES)]
+        #[linkme(crate = $crate::__private::linkme)]
+        static __RTLOG_SITE: $crate::Site = $site.__with_strings(
+            $crate::__private::text(&__RTLOG_MODULE),
+            $crate::__private::text(&__RTLOG_FILE),
+            $crate::__private::text(&__RTLOG_FMT),
+        );
+    };
 }
 
 #[doc(hidden)]
@@ -173,9 +239,7 @@ macro_rules! log {
             $fmt,
             $crate::__private::nargs(__N),
         );
-        #[$crate::__private::linkme::distributed_slice($crate::site::SITES)]
-        #[linkme(crate = $crate::__private::linkme)]
-        static __RTLOG_SITE: $crate::Site = __SITE;
+        $crate::__site_static!(__SITE);
         __SITE.id
     }};
     (to: $p:expr, $lvl:expr, $fmt:literal $(, $arg:expr)* $(,)?) => {{
@@ -213,9 +277,7 @@ macro_rules! __span_site {
             ::core::column!(),
             $name,
         );
-        #[$crate::__private::linkme::distributed_slice($crate::site::SITES)]
-        #[linkme(crate = $crate::__private::linkme)]
-        static __RTLOG_SPAN: $crate::Site = __SITE;
+        $crate::__site_static!(__SITE);
         __SITE.id
     }};
 }

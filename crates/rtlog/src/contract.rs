@@ -87,15 +87,31 @@ impl core::fmt::Display for ContractError {
 impl std::error::Error for ContractError {}
 
 /// Check for collisions and write the contract to `path`.
+///
+/// With the `strip` feature this fails with an `Unsupported` I/O error and
+/// writes nothing: the running program cannot read its descriptors. Get the
+/// contract from the binary instead (`rtlog contract --elf`).
 pub fn write(path: impl AsRef<std::path::Path>) -> Result<(), ContractError> {
-    if let Some((a, b)) = site::find_collision() {
-        return Err(ContractError::Collision {
-            id: a.id,
-            a: std::format!("{}:{}", a.file, a.line),
-            b: std::format!("{}:{}", b.file, b.line),
-        });
+    #[cfg(feature = "strip")]
+    {
+        let _ = path.as_ref();
+        Err(ContractError::Io(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "rtlog is built with the `strip` feature: the program cannot read its own \
+             descriptors; run `rtlog contract --elf <binary>` on the build output instead",
+        )))
     }
-    std::fs::write(path, to_jsonl()).map_err(ContractError::Io)
+    #[cfg(not(feature = "strip"))]
+    {
+        if let Some((a, b)) = site::find_collision() {
+            return Err(ContractError::Collision {
+                id: a.id,
+                a: std::format!("{}:{}", a.file, a.line),
+                b: std::format!("{}:{}", b.file, b.line),
+            });
+        }
+        std::fs::write(path, to_jsonl()).map_err(ContractError::Io)
+    }
 }
 
 #[cfg(test)]

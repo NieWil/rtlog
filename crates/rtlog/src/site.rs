@@ -75,6 +75,32 @@ impl Site {
 }
 
 impl Site {
+    /// This descriptor with its three strings read from other storage: the
+    /// `strip` feature keeps each site's strings in statics of the
+    /// `rtlog_strs` section. The ID stays the hash of the original strings.
+    #[doc(hidden)]
+    pub const fn __with_strings(
+        self,
+        module: &'static str,
+        file: &'static str,
+        fmt: &'static str,
+    ) -> Site {
+        Site {
+            id: self.id,
+            kind: self.kind,
+            level: self.level,
+            nargs: self.nargs,
+            _reserved: 0,
+            line: self.line,
+            column: self.column,
+            module,
+            file,
+            fmt,
+        }
+    }
+}
+
+impl Site {
     /// Build a span site; `name` is shown as the slice name on the host.
     pub const fn span(
         module: &'static str,
@@ -141,8 +167,15 @@ pub const fn span_id(module: &str, file: &str, line: u32, column: u32, name: &st
 pub static SITES: [Site];
 
 /// Every site linked into this binary.
+///
+/// Empty with the `strip` feature: the descriptors may not be in the loaded
+/// image then, so rtlog never reads them; the host reads them from the
+/// binary (`rtlog contract --elf`).
 pub fn sites() -> &'static [Site] {
-    &SITES
+    #[cfg(not(feature = "strip"))]
+    return &SITES;
+    #[cfg(feature = "strip")]
+    &[]
 }
 
 /// Order-independent hash of a set of site IDs; written in the stream header
@@ -152,9 +185,14 @@ pub fn contract_hash_of(ids: impl IntoIterator<Item = u32>) -> u32 {
         .fold(0u32, |acc, id| acc.wrapping_add(fnv1a32(&id.to_le_bytes())))
 }
 
-/// Contract hash of this binary.
+/// Contract hash of this binary, written in the stream header.
+///
+/// 0 with the `strip` feature, which the decoder reads as "not stated": the
+/// descriptors are not read at run time. Site IDs are content hashes, so a
+/// capture decoded against the wrong contract still fails, at the first
+/// frame whose ID the contract does not have.
 pub fn contract_hash() -> u32 {
-    contract_hash_of(SITES.iter().map(|s| s.id))
+    contract_hash_of(sites().iter().map(|s| s.id))
 }
 
 /// Two distinct sites sharing an ID, if any.
@@ -318,5 +356,50 @@ mod tests {
     fn contract_hash_is_order_independent() {
         assert_eq!(contract_hash_of([1, 2, 3]), contract_hash_of([3, 1, 2]));
         assert_ne!(contract_hash_of([1, 2, 3]), contract_hash_of([1, 2, 4]));
+    }
+
+    #[test]
+    fn with_strings_keeps_the_id_and_takes_the_new_strings() {
+        // What the `strip` feature does: same descriptor, strings stored elsewhere.
+        static MODULE: [u8; 1] = crate::__private::bytes("m");
+        static FILE: [u8; 4] = crate::__private::bytes("f.rs");
+        static FMT: [u8; 4] = crate::__private::bytes("x={}");
+        let original = Site::new(Level::Warn, "m", "f.rs", 7, 9, "x={}", 1);
+        let id = original.id;
+        let s = original.__with_strings(
+            crate::__private::text(&MODULE),
+            crate::__private::text(&FILE),
+            crate::__private::text(&FMT),
+        );
+        assert_eq!(
+            (s.id, s.kind, s.level, s.nargs),
+            (id, SiteKind::Log, Level::Warn, 1)
+        );
+        assert_eq!((s.line, s.column), (7, 9));
+        assert_eq!((s.module, s.file, s.fmt), ("m", "f.rs", "x={}"));
+        assert_eq!(s.fmt.as_ptr(), FMT.as_ptr());
+    }
+
+    #[test]
+    fn bytes_copies_a_string_at_run_time_too() {
+        // The macros evaluate it in a `static`; called at run time it must agree.
+        let b: [u8; 4] = crate::__private::bytes(core::hint::black_box("x={}"));
+        assert_eq!(&b, b"x={}");
+    }
+
+    #[test]
+    #[should_panic(expected = "not UTF-8")]
+    fn text_rejects_bytes_that_are_not_utf8() {
+        static BAD: [u8; 2] = [0xff, 0xfe];
+        let _ = crate::__private::text(&BAD);
+    }
+
+    #[cfg(not(feature = "strip"))]
+    #[test]
+    fn the_contract_hash_covers_the_linked_sites() {
+        assert_eq!(
+            contract_hash(),
+            contract_hash_of(sites().iter().map(|s| s.id))
+        );
     }
 }
