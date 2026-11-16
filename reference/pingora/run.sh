@@ -17,10 +17,12 @@ rm -rf "$OUT" && mkdir -p "$OUT"
 
 echo "| Access log | Requests/s | p50 µs | p99 µs | p99.9 µs | Log call, mean ns | Log bytes/request | Dropped |"
 echo "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"
-# The variants take turns, so that a change in the machine's load during the
-# run affects all of them alike.
+# The variants take turns, and each round starts with another one, so that a
+# change in the machine's load or the position in the round affects all of
+# them alike.
+orders=("none log rtlog" "rtlog none log" "log rtlog none")
 for round in $(seq "$ROUNDS"); do
-  for logger in none log rtlog; do
+  for logger in ${orders[$(((round - 1) % 3))]}; do
     "$BIN" "$logger" "$OUT/$logger-$round" "$SECS" "$CONNS" "$THREADS" 2> "$OUT/$logger-$round.err"
   done
 done

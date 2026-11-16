@@ -42,9 +42,23 @@ Intel Xeon at 2.30 GHz, 4 virtual CPUs of a shared cloud VM, Linux 6.18, rustc 1
 What the numbers say, and what they do not:
 
 - **The log call itself:** about 9.7 µs through `log` and `env_logger`, about 270 ns through rtlog, measured inside the proxy around the call (the `Instant` pair adds about 20 ns to both). The `log` figure is formatting plus one `write` system call per record, with four worker threads taking turns on the file. rtlog copies two short strings and four integers into the thread's ring.
-- **Throughput:** with the `log` access log the proxy serves 7 to 11 % fewer requests than with none, in every round. With rtlog the difference from no logging is inside the noise of this machine: rtlog is above `none` in all three rounds, which a logger cannot cause. Read it as "not measurable here", not as a gain.
+- **Throughput:** with the `log` access log the proxy serves 7 to 11 % fewer requests than with none, in every round. With rtlog the difference from no logging is inside the noise of this machine: rtlog is above `none` in all three rounds, which a logger cannot cause. Read it as "not measurable here", not as a gain. See the next section.
 - **Log volume:** 54.9 bytes per request against 139.7, 2.5 times less, before any compression. Both logs decode to the same fields.
 - **Not shown:** a buffered or asynchronous `log` backend would cost less per call than `env_logger`'s direct writes; that comparison belongs to the logger comparison of roadmap section 12b. The numbers come from a shared VM and vary by several percent between rounds; the three rounds are listed rather than averaged for that reason.
+
+## Why rtlog is not faster than no log
+
+A log call adds work, so the proxy cannot serve more requests with it than without. The table above shows more only because two runs of the same variant differ by more than rtlog's cost. A second experiment, six rounds of 6 s with the variants in every possible order, on the same machine:
+
+| Access log | Requests/s, lowest to highest of 6 runs | Mean | Against none |
+| --- | ---: | ---: | ---: |
+| none | 41525 to 45017 | 43666 | |
+| log | 38636 to 44056 | 40859 | −6.4 % |
+| rtlog | 42482 to 48510 | 44840 | +2.7 % |
+
+Runs with no access log alone spread over 8 % (41525 to 45017). rtlog was above `none` in four rounds and below it in two. Its cost in this workload can be estimated from the call time instead: 270 ns per request on one of four worker threads that each spend about 85 µs per request, about 0.3 %, far below what this setup can resolve.
+
+Where the spread comes from: the upstream, the proxy and 32 load-generating threads share 4 virtual CPUs of a shared VM, so the scheduler, not the proxy, decides much of each run. Resolving a 0.3 % difference needs the load generator on other cores or another machine, pinned proxy threads, and many more rounds; that is part of the comparison harness of roadmap 12b.
 
 ## What a full port needs
 
