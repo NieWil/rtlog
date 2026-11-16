@@ -10,7 +10,7 @@ Measured:
 | Build | Unstripped | Stripped | Saved |
 | --- | ---: | ---: | ---: |
 | Rust, Cortex-M4F, 10 call sites ([`size/mcu`](../size/mcu), `opt-level = "s"`, LTO), flash | 4536 B | 3796 B | 740 B (16 %) |
-| Zephyr `hello` on `qemu_cortex_m3`, 4 call sites, `zephyr.bin` | 10124 B | 9912 B | 212 B |
+| Zephyr `hello` on `qemu_cortex_m3`, 4 call sites, `zephyr.bin` | 10108 B | 9896 B | 212 B |
 | C demo on x86-64 Linux, 8 call sites, file size | 29152 B | 27312 B | 1840 B |
 
 ELF targets only: firmware and Linux. Mach-O and PE binaries are not stripped.
