@@ -96,6 +96,18 @@ The numbers rtlog publishes today come from micro-benchmarks (`examples/timing.r
 Take existing open-source programs that already log, and port their log calls, so the baseline is code rtlog's authors did not write. The port is at source level: a call site's descriptor is created by the compiler, so an already built binary cannot be converted.
 
 1. Pick the references and record why: one Zephyr application that uses `LOG_*` heavily (a networking or sensor sample of the Zephyr tree, built for `qemu_cortex_m3` and one real board), one embedded Rust firmware instrumented with defmt, one Linux service that uses `tracing` or `log`. Criteria: more than 100 call sites, several threads or tasks, a licence that allows a fork, builds in CI.
+   Candidates, to be confirmed against those criteria when step 1 is done (call-site counts and licences have not been checked yet):
+
+   | Audience | Candidate | Logger today | Why it is representative |
+   | --- | --- | --- | --- |
+   | Zephyr, C | `samples/net/sockets/echo_server` of the Zephyr tree | `LOG_*`, deferred | Network stack and application log from several threads; builds for QEMU, so CI can run it |
+   | Zephyr, C | ZMK keyboard firmware | `LOG_*` | A shipped product on small nRF52 and RP2040 boards, where flash is tight |
+   | Embedded Rust | An Embassy example for nRF52840 or STM32 (`embassy-rs/embassy`, `examples/`) | defmt over RTT | The closest competitor on its home ground: async tasks, one global defmt buffer against one ring per task |
+   | Embedded Rust | RMK keyboard firmware | defmt | A complete firmware rather than an example |
+   | Linux, Rust | `tokio-rs/mini-redis` | `tracing` | Small, well known, request spans on a multi-threaded runtime; a load generator ships with it |
+   | Real-time C++ | PX4 autopilot, one module such as the attitude controller | `PX4_INFO` / uORB logging | Hard real-time control loops, the case rtlog is built for; a stretch goal, as the build is large |
+
+   Start with the Zephyr echo server and one Embassy example: both build without hardware, and their loggers are the ones readers will compare rtlog with.
 2. Measure each reference as it is, with its own logger: flash by section, static RAM, cycles per call for its three most frequent call sites, bytes per second on its transport. Commit the method and the numbers (`docs/reference-apps.md`).
 3. Port the Zephyr reference to `rtlog.h`. Report the same four numbers for three builds: original logger, rtlog, rtlog with `CONFIG_RTLOG_STRIP=y`. Keep the port as a patch series in the repository, applied in CI on a pinned upstream revision, so the comparison is reproducible and does not rot silently.
 4. Port the defmt firmware the same way (Rust `no_std`, `strip` feature).
