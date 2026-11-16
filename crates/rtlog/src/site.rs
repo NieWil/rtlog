@@ -381,6 +381,13 @@ mod tests {
     }
 
     #[test]
+    fn bytes_copies_a_string_at_run_time_too() {
+        // The macros evaluate it in a `static`; called at run time it must agree.
+        let b: [u8; 4] = crate::__private::bytes(core::hint::black_box("x={}"));
+        assert_eq!(&b, b"x={}");
+    }
+
+    #[test]
     #[should_panic(expected = "not UTF-8")]
     fn text_rejects_bytes_that_are_not_utf8() {
         static BAD: [u8; 2] = [0xff, 0xfe];
