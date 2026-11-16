@@ -357,4 +357,42 @@ mod tests {
         assert_eq!(contract_hash_of([1, 2, 3]), contract_hash_of([3, 1, 2]));
         assert_ne!(contract_hash_of([1, 2, 3]), contract_hash_of([1, 2, 4]));
     }
+
+    #[test]
+    fn with_strings_keeps_the_id_and_takes_the_new_strings() {
+        // What the `strip` feature does: same descriptor, strings stored elsewhere.
+        static MODULE: [u8; 1] = crate::__private::bytes("m");
+        static FILE: [u8; 4] = crate::__private::bytes("f.rs");
+        static FMT: [u8; 4] = crate::__private::bytes("x={}");
+        let original = Site::new(Level::Warn, "m", "f.rs", 7, 9, "x={}", 1);
+        let id = original.id;
+        let s = original.__with_strings(
+            crate::__private::text(&MODULE),
+            crate::__private::text(&FILE),
+            crate::__private::text(&FMT),
+        );
+        assert_eq!(
+            (s.id, s.kind, s.level, s.nargs),
+            (id, SiteKind::Log, Level::Warn, 1)
+        );
+        assert_eq!((s.line, s.column), (7, 9));
+        assert_eq!((s.module, s.file, s.fmt), ("m", "f.rs", "x={}"));
+        assert_eq!(s.fmt.as_ptr(), FMT.as_ptr());
+    }
+
+    #[test]
+    #[should_panic(expected = "not UTF-8")]
+    fn text_rejects_bytes_that_are_not_utf8() {
+        static BAD: [u8; 2] = [0xff, 0xfe];
+        let _ = crate::__private::text(&BAD);
+    }
+
+    #[cfg(not(feature = "strip"))]
+    #[test]
+    fn the_contract_hash_covers_the_linked_sites() {
+        assert_eq!(
+            contract_hash(),
+            contract_hash_of(sites().iter().map(|s| s.id))
+        );
+    }
 }
