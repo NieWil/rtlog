@@ -95,22 +95,27 @@ The numbers rtlog publishes today come from micro-benchmarks (`examples/timing.r
 
 Take existing open-source programs that already log, and port their log calls, so the baseline is code rtlog's authors did not write. The port is at source level: a call site's descriptor is created by the compiler, so an already built binary cannot be converted.
 
-1. Pick the references and record why. They must log and trace a lot, because that is where a logger's cost shows: one per scale, from a microcontroller to a Linux server. Criteria: at its verbose level the program emits thousands of records per second (or fills its log buffer and drops); more than 100 call sites; several threads or tasks; a licence that allows a fork; builds in CI.
+1. Pick the references and record why. The best reference is a program where the log is essential (operators or engineers cannot do without it) and that has a performance requirement the logger must not break; it must also log and trace a lot, because that is where a logger's cost shows. One per scale, from a microcontroller to a Linux server. Criteria: at its verbose level the program emits thousands of records per second (or fills its log buffer and drops); more than 100 call sites; several threads or tasks; a licence that allows a fork; builds in CI.
 
-   Candidates, to be confirmed against those criteria when step 1 is done (record rates, call-site counts and licences have not been measured yet):
+   Candidates in order of popularity (GitHub stars on 2026-11-16), to be confirmed against those criteria when step 1 is done: record rates and call-site counts have not been measured yet.
 
-   | Scale | Candidate | Logger today | Where the volume comes from |
-   | --- | --- | --- | --- |
-   | MCU, Zephyr | Bluetooth peripheral sample (`samples/bluetooth/peripheral_hr`) with the host stack at debug level (`CONFIG_BT_LOG_LEVEL_DBG`) | `LOG_*`, deferred | Every HCI command, event and ACL packet is logged; Zephyr's deferred buffer overflows at this level on small parts |
-   | MCU, Zephyr | `samples/net/sockets/echo_server` with the network stack at debug level | `LOG_*`, deferred | Per-packet logs from the IP stack and the driver, from several threads; builds for QEMU, so CI can run it |
-   | MCU, Rust | An Embassy USB or network example (`embassy-rs/embassy`, `examples/`) with `defmt` at trace level | defmt over RTT | Per-packet and per-interrupt traces through one global buffer |
-   | Flight controller (NuttX or Linux) | PX4 autopilot, estimator and attitude controller | `PX4_INFO`, uORB logging | Control loops at 250 Hz to 1 kHz that log state every cycle |
-   | Linux robot | A ROS 2 navigation stack (Nav2) at debug level | `RCLCPP_*` (spdlog underneath) | Many nodes, each logging per sensor message |
-   | Linux service, Rust | `linkerd2-proxy` or `tokio-rs/mini-redis` under load, `tracing` at trace level | `tracing` | Several spans and events per request, on a multi-threaded runtime |
-   | Linux service, C++ | Envoy proxy at debug or trace level | spdlog | Per-connection and per-request logs across worker threads |
-   | Linux application, tracing | Bevy game engine with its `trace` feature | `tracing` spans | One span per system per frame: tens of thousands of spans per second, already viewed in Perfetto-like tools |
+   | Stars | Candidate | Scale, language | Logger today | Log essential? | Performance requirement |
+   | ---: | --- | --- | --- | --- | --- |
+   | 51 k | ClickHouse | Linux server, C++ | Poco-based, per query and per part | Yes: query and server logs are how it is operated | Query latency; very large build |
+   | 50 k | Bevy (`trace` feature) | Linux application, Rust | `tracing` spans | No: a profiling aid | Frame time; tens of thousands of spans per second |
+   | 36 k | Qdrant | Linux server, Rust | `log` | Yes | Search latency |
+   | 29 k | Envoy | Linux proxy, C++ | spdlog, access log per request | Yes: the access log is a product feature | Per-request latency across worker threads |
+   | 28 k | Pingora | Linux proxy, Rust | `log`, access log per request | Yes: same as Envoy | Per-request latency on a multi-threaded runtime |
+   | 28 k | Valkey | Linux server, C | Own `serverLog` | Partly: sparse at default level | Single-threaded command latency |
+   | 23 k | Vector | Linux pipeline, Rust | `tracing` | Yes | Throughput in events per second |
+   | 17 k | TiKV | Linux database, Rust | slog with an async drain | Yes: a distributed database is diagnosed from its logs | Write and read latency |
+   | 17 k | Zephyr: network `echo_server` or a Bluetooth sample with the stack at debug level | MCU, C | `LOG_*`, deferred | Yes during bring-up and field diagnosis | Radio and interrupt timing; small flash and RAM |
+   | 13 k | PX4 autopilot | Flight controller (NuttX), C++ | `PX4_INFO`, uORB flight log | Yes: the flight log is the black box | Control loops at 250 Hz to 1 kHz, hard real time |
+   | 10 k | Embassy examples with `defmt` at trace level | MCU, Rust | defmt over RTT | During development | Interrupt latency; one global buffer |
+   | 5 k | Nav2 (ROS 2 navigation) | Linux robot, C++ | `RCLCPP_*` | Yes | Control and planning rates |
+   | 5 k | `tokio-rs/mini-redis` | Linux service, Rust | `tracing` | No: a teaching project | None stated; small enough to port by hand |
 
-   Start with three, one per scale: the Zephyr echo server at debug level (runs in the QEMU job), `mini-redis` under its load generator (small enough to port by hand), and Bevy's `trace` feature (span volume). The others follow once the method is settled.
+   Start with three where the log is essential and performance is a requirement, one per scale: Pingora on Linux (Rust, every request writes an access log on the latency path), a Zephyr sample with its network or Bluetooth stack at debug level on a microcontroller (runs in the QEMU job), and PX4 for hard real time (its log is the flight recorder). Envoy is the C++ counterpart of Pingora. `mini-redis` stays useful as a first, small port to settle the method before the large ones.
 2. Measure each reference as it is, with its own logger: flash by section, static RAM, cycles per call for its three most frequent call sites, bytes per second on its transport. Commit the method and the numbers (`docs/reference-apps.md`).
 3. Port the Zephyr reference to `rtlog.h`. Report the same four numbers for three builds: original logger, rtlog, rtlog with `CONFIG_RTLOG_STRIP=y`. Keep the port as a patch series in the repository, applied in CI on a pinned upstream revision, so the comparison is reproducible and does not rot silently.
 4. Port the defmt firmware the same way (Rust `no_std`, `strip` feature).
