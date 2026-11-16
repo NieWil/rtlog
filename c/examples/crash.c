@@ -18,7 +18,7 @@ static void *worker(void *arg) {
     (void)arg;
     rtlog_set_thread_name("worker");
     for (int i = 0; i < 200; i++) RTLOG_INFO("worker step={}", i);
-    /* No rtlog_thread_exit(): on POSIX the slot is released when the thread ends. */
+    /* No rtlog_thread_exit(): on POSIX and Windows the slot is released when the thread ends. */
     return NULL;
 }
 
@@ -31,11 +31,17 @@ static int to_file(void *user, const uint8_t *bytes, size_t len) {
     return fwrite(bytes, 1, len, (FILE *)user) == len ? 0 : 1;
 }
 
-static pthread_barrier_t both;
+/* Both threads of the "two" mode are ready to fault (macOS has no pthread barriers). */
+static int ready;
+
+static void meet(void) {
+    __atomic_fetch_add(&ready, 1, __ATOMIC_ACQ_REL);
+    while (__atomic_load_n(&ready, __ATOMIC_ACQUIRE) < 2) {}
+}
 
 static void *faults_too(void *arg) {
     (void)arg;
-    pthread_barrier_wait(&both);
+    meet();
     /* SIGSEGV on a second thread, at the same moment: the crash under test. */
     *(volatile int *)0 = 2; // NOLINT(clang-analyzer-core.NullDereference)
     return NULL;
@@ -51,6 +57,10 @@ int main(int argc, char **argv) {
         fprintf(stderr, "usage: %s fpe|segv|abort|snapshot|threads <crash-dir>\n", argv[0]);
         return 2;
     }
+#ifdef _WIN32
+    /* No "this program has stopped working" dialog: the test must not wait for a click. */
+    SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
+#endif
     if (rtlog_crash_install(argv[2]) != 0) return 1;
     rtlog_set_thread_name("main");
     if (!strcmp(argv[1], "resync")) {
@@ -82,7 +92,7 @@ int main(int argc, char **argv) {
     if (!strcmp(argv[1], "threads")) {
         /* More threads than slots over the process life (main holds one slot;
          * every round fills the rest): each exiting thread frees its slot by
-         * itself (pthread TLS destructor) once a drain pass runs, so none of
+         * itself (thread-exit destructor) once a drain pass runs, so none of
          * the later threads is left without a ring. */
         enum { PER_ROUND = RTLOG_MAX_THREADS - 1 };
         for (int round = 0; round < 10; round++) {
@@ -105,10 +115,10 @@ int main(int argc, char **argv) {
     volatile int zero = 0;
     volatile int *null = NULL;
     if (!strcmp(argv[1], "fpe")) {
-        volatile int r = 100 / zero; /* SIGFPE on x86 */
+        volatile int r = 100 / zero; /* SIGFPE on x86 (Windows: EXCEPTION_INT_DIVIDE_BY_ZERO) */
         (void)r;
     } else if (!strcmp(argv[1], "segv")) {
-        *null = 1; /* SIGSEGV */
+        *null = 1; /* SIGSEGV (Windows: EXCEPTION_ACCESS_VIOLATION) */
     } else if (!strcmp(argv[1], "abort")) {
         abort(); /* SIGABRT */
     } else if (!strcmp(argv[1], "flood")) {
@@ -116,10 +126,9 @@ int main(int argc, char **argv) {
         if (rtlog_crash_dumps() != RTLOG_MAX_SOFT_DUMPS) return 5;
         *null = 1; /* a fatal signal is still dumped */
     } else if (!strcmp(argv[1], "two")) {
-        pthread_barrier_init(&both, NULL, 2);
         pthread_t t;
         pthread_create(&t, NULL, faults_too, NULL);
-        pthread_barrier_wait(&both);
+        meet();
         *null = 1; /* both threads fault at once */
         pthread_join(t, NULL);
     } else if (!strcmp(argv[1], "snapshot")) {

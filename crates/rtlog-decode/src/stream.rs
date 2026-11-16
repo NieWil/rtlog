@@ -100,9 +100,11 @@ pub enum Event<'c> {
 pub struct Crash {
     /// 1 = panic, 2 = signal, 3 = snapshot requested by the program.
     pub kind: u8,
-    /// Signal number for a signal crash, 0 otherwise.
+    /// Signal number for a signal crash, 0 otherwise. A Windows exception
+    /// is a kind 2 crash with signal 0.
     pub signal: i32,
-    /// The signal's `si_code` for a signal crash, 0 otherwise.
+    /// The signal's `si_code` for a signal crash; the exception code
+    /// (such as `0xC0000005`) for a Windows exception; 0 otherwise.
     pub code: i32,
     /// Faulting address (signals), 0 otherwise.
     pub addr: u64,
@@ -125,10 +127,18 @@ impl Crash {
         match self.kind {
             1 => format!("panic: {message}"),
             2 => {
-                let mut s = format!("{message} (signal {}, code {})", self.signal, self.code);
+                let mut s = if self.signal == 0 {
+                    // A Windows exception: the code identifies it.
+                    format!("{message} (exception {:#010x})", self.code as u32)
+                } else {
+                    format!("{message} (signal {}, code {})", self.signal, self.code)
+                };
                 // SIGILL 4, SIGBUS 7, SIGFPE 8, SIGSEGV 11: the address means
                 // something (data address, or faulting instruction for FPE/ILL).
-                if matches!(self.signal, 4 | 7 | 8 | 11) {
+                // Windows: access violation and in-page error carry the data address.
+                if matches!(self.signal, 4 | 7 | 8 | 11)
+                    || (self.signal == 0 && matches!(self.code as u32, 0xC000_0005 | 0xC000_0006))
+                {
                     s.push_str(&format!(" addr={:#x}", self.addr));
                 }
                 if self.pc != 0 {
@@ -648,5 +658,25 @@ mod tests {
         ));
         assert_eq!(d.ctx_name(2), Some("net"));
         assert_eq!(d.next(), None);
+    }
+
+    #[test]
+    fn a_windows_exception_is_described_by_its_code() {
+        let crash = |code: u32, addr| Crash {
+            kind: 2,
+            signal: 0,
+            code: code as i32,
+            addr,
+            pc: 0x7ff6_0000_1234,
+            message: "EXCEPTION_ACCESS_VIOLATION: invalid memory access".into(),
+        };
+        assert_eq!(
+            crash(0xC000_0005, 0x10).describe(),
+            "EXCEPTION_ACCESS_VIOLATION: invalid memory access (exception 0xc0000005) addr=0x10 pc=0x7ff600001234"
+        );
+        // Other exceptions carry no data address.
+        assert!(crash(0xC000_0094, 0)
+            .describe()
+            .ends_with("(exception 0xc0000094) pc=0x7ff600001234"));
     }
 }

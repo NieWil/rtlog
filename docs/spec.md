@@ -149,8 +149,8 @@ A site ID is a 32-bit content hash, so the scheme works on every target and obje
 
 **Generation**
 
-1. Each macro call emits one `static` descriptor into a link section collected by `linkme` (`linkme_SITES` on ELF, the equivalent Mach-O and PE sections). `rtlog contract --elf` reads only the ELF section; on macOS and Windows the program writes its own contract with `contract::write`. C and C++ emit `struct rtlog_site` into `rtlog_sites`. No files are written at expansion time, so parallel crate builds cannot race.
-2. `rtlog contract --elf <image>` reads the descriptors with the `object` crate, applies `RELATIVE` relocations for position-independent executables, validates them and writes the JSON-lines contract. On `std`, `rtlog::contract::write` writes the same file from the running program.
+1. Each macro call emits one `static` descriptor into a link section collected by `linkme` (`linkme_SITES` on ELF, the equivalent Mach-O and PE sections). C and C++ emit `struct rtlog_site` into `rtlog_sites` (ELF, and `__DATA,rtlog_sites` on Mach-O) or `rtlog` (PE, between two all-zero marker entries). No files are written at expansion time, so parallel crate builds cannot race.
+2. `rtlog contract --elf <image>` reads the descriptors of an ELF, Mach-O or PE image with the `object` crate, applies the load-time pointer fix-ups of position-independent executables (`RELATIVE` relocations on ELF, rebases and chained fixups on Mach-O), validates them and writes the JSON-lines contract. On Mach-O and PE a Rust descriptor is recognised by its ID, which must equal the hash of its other fields: the section name is a hash there (Mach-O) or shared by every `linkme` slice of the program (PE). On `std`, `rtlog::contract::write` writes the same file from the running program.
 3. The descriptor section ships in the image: binaries are self-describing, and format strings are present in them. Stripping is on the roadmap.
 
 **Binding stream to contract**
@@ -200,7 +200,7 @@ Arguments are written fixed-width so every site has a compile-time maximum frame
 | `..04` | span\_open | timed like a log frame (ts delta, ctx), then u32 span site ID, u64 span ID, u64 parent ID (0 = root) |
 | `..05` | span\_close | timed like a log frame, then u64 span ID |
 | `..06` | time\_sync | reserved (roadmap) |
-| `..07` | crash | timed like a log frame, then u8 kind (1 panic, 2 signal, 3 snapshot), i32 signal, i32 code, u64 fault address, u64 pc, message (u8 length, bit 7 = truncated, + UTF-8); section 8b |
+| `..07` | crash | timed like a log frame, then u8 kind (1 panic, 2 signal or Windows exception, 3 snapshot), i32 signal (0 for a Windows exception), i32 code (`si_code`, or the exception code), u64 fault address, u64 pc, message (u8 length, bit 7 = truncated, + UTF-8); section 8b |
 | `..08` | block\_tag | reserved (roadmap) |
 | `..09` | ctx\_time | ctx, u64 absolute ticks: sets the context's clock, so a crash dump that holds only the tail of a ring still decodes to absolute times |
 
@@ -311,7 +311,9 @@ In debug builds a developer sees text on stdout with no tooling; in any build a 
 - Only the drain formats; call sites keep the binary path, so timings measured with it on are representative.
 - The contract comes from the running binary's own descriptors.
 
-**Crash log** (Unix with `std`: `rtlog::crash::install(dir)`; C on POSIX: `rtlog_crash_install(dir)`)
+**Crash log** (Unix and Windows with `std`: `rtlog::crash::install(dir)`; C on POSIX and Windows: `rtlog_crash_install(dir)`)
+
+What follows describes Unix. On Windows the fatal events are exceptions that no handler takes (`SetUnhandledExceptionFilter`) and the C runtime's `SIGABRT`; the dump is the same, written on the faulting thread's stack through the C runtime's `_wopen` / `_write`, and its `crash` frame has signal 0, the exception code in `code`, the data address of an access violation and the program counter. `std::process::abort` and stack overflow are not dumped there ([crash guide](crash.md#windows)).
 
 On a panic, `SIGSEGV`, `SIGBUS`, `SIGFPE`, `SIGILL` or `SIGABRT` (so `abort()` and `panic = "abort"`), the handler:
 

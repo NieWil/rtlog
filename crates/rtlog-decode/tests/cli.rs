@@ -446,9 +446,9 @@ fn a_truncated_stream_prints_what_decoded_and_fails() {
     );
 }
 
-#[cfg(target_os = "linux")]
+/// ELF on Linux, Mach-O on macOS, PE on Windows: the test binary itself.
 #[test]
-fn contract_extracts_the_contract_from_an_elf_binary() {
+fn contract_extracts_the_contract_from_a_binary() {
     capture(); // this binary has log and span sites
     let exe = std::env::current_exe().unwrap();
     let c = common::contract();
@@ -472,7 +472,7 @@ fn contract_extracts_the_contract_from_an_elf_binary() {
     let target = dir.0.join("app.contract.jsonl");
     let out = rtlog_cmd()
         .arg("contract")
-        .arg("--elf")
+        .arg("--binary")
         .arg(&exe)
         .arg("-o")
         .arg(&target)

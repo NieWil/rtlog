@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- **C and C++ on macOS and Windows.** `rtlog.h` now builds for Mach-O (Apple Clang) and PE (MinGW-w64 GCC, or Clang for the MinGW or the MSVC ABI; not `cl.exe`). Descriptors go into `__DATA,rtlog_sites` on macOS and into an `rtlog` section on Windows. The default clock is `CLOCK_MONOTONIC` on macOS and the performance counter on Windows; a thread's ring slot is released at thread exit on both (pthread destructor, fiber-local-storage callback). CI runs `scripts/c_e2e.sh` on `macos-latest` (Apple Clang) and `windows-latest` (MinGW-w64 GCC), and the C++ demo with Clang for the MSVC ABI.
+- **`rtlog contract` reads Mach-O and PE binaries**, not only ELF, for Rust and C sites: `rtlog contract --elf <binary>` (also spelled `--binary`) and `rtlog_decode::elf::contract_from_binary`. Mach-O rebases and chained fixups are applied; of a universal binary the first architecture is read. On Mach-O and PE, Rust descriptors are found by checking each entry's stored ID against the hash of its fields (`rtlog::site::span_id` is new for that), because the section name is a hash on Mach-O and the linker merges all `linkme` sections on PE. `contract_from_elf` still accepts ELF only.
+- **Crash log on Windows**, in Rust (`rtlog::crash`) and C (`rtlog_crash_install`): panics, unhandled exceptions (access violation, integer division by zero, illegal instruction) through `SetUnhandledExceptionFilter`, the C runtime's `abort()`, and snapshots. The crash record carries the exception code, the faulting address and the program counter; the decoder prints `CRASH EXCEPTION_ACCESS_VIOLATION: invalid memory access (exception 0xc0000005) addr=0x0 pc=0x...`. Not dumped on Windows: `std::process::abort` and stack overflow (fail-fast, no handler runs).
+- **Zephyr: the `hello` sample and the guide set `CONFIG_BOOT_BANNER=n`.** The banner selects `PRINTK`, so `CONFIG_PRINTK=n` alone had no effect and the banner text preceded the stream header on the UART (`not an rtlog stream`). Found by the new CI job that builds the sample for `qemu_cortex_m3`, runs it in QEMU and decodes the UART capture (`scripts/zephyr_qemu.sh`).
+- C: `crash.c` no longer needs `pthread_barrier_t` (absent on macOS); `scripts/c_e2e.sh` runs on macOS and in Git Bash.
+
 ## v0.2.5 — Debian/Ubuntu packages, C thread-name fix
 
 Each release now ships `.deb` packages for the CLI and the C header, and `rtlog_set_thread_name` no longer loses the name on a thread's first use.

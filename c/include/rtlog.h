@@ -4,9 +4,10 @@
  *
  * A log call writes a site ID, a timestamp delta, a context ID and raw typed
  * argument bytes into the calling thread's own lock-free ring: no formatting,
- * no allocation, no lock. Format strings go into the `rtlog_sites` ELF
- * section; `rtlog contract --elf <binary>` reads them on the host and
- * `rtlog decode` turns a capture into text, JSON lines or a Perfetto trace.
+ * no allocation, no lock. Format strings go into the `rtlog_sites` section
+ * of the binary (`rtlog` in a Windows PE file); `rtlog contract --elf <binary>`
+ * reads them on the host and `rtlog decode` turns a capture into text, JSON
+ * lines or a Perfetto trace.
  *
  *   #define RTLOG_IMPLEMENTATION   // in exactly one .c / .cpp file
  *   #include "rtlog.h"
@@ -18,8 +19,10 @@
  * Placeholders are `{}` (one per argument), as in the Rust API; `{:x}`,
  * `{:.3}` and the other host-side specs work too.
  *
- * Requirements: GCC or Clang, an ELF target (Linux, Zephyr, bare metal),
- * little-endian, C11 (`_Generic`, `_Thread_local`) or C++11.
+ * Requirements: GCC or Clang (on Windows: MinGW-w64 GCC, or Clang for either
+ * the MinGW or the MSVC ABI; not cl.exe), little-endian, C11 (`_Generic`,
+ * `_Thread_local`) or C++11. Targets: Linux and other ELF systems, Zephyr,
+ * bare metal, macOS, Windows.
  * Configuration (define before including): RTLOG_MAX_THREADS (16),
  * RTLOG_RING_SIZE (16384, power of two).
  */
@@ -32,9 +35,6 @@
 
 #if !defined(__GNUC__)
 #error "rtlog.h needs GCC or Clang (section attributes and __atomic builtins)"
-#endif
-#if defined(__APPLE__) || defined(_WIN32)
-#error "rtlog.h supports ELF targets only (Linux, Zephyr, bare metal)"
 #endif
 #if __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__
 #error "rtlog.h supports little-endian targets only"
@@ -101,19 +101,21 @@ void rtlog_set_level(int level);
  * the Perfetto timeline; `rtlog_set_spans(0)` removes it. OFF stops both. */
 void rtlog_set_spans(int on);
 void rtlog_set_thread_name(const char *name);
-/* Release the calling thread's ring slot. On POSIX this also happens by itself
- * when the thread exits (a pthread TLS destructor); call it only on targets
- * without pthreads, or to free the slot early. */
+/* Release the calling thread's ring slot. On POSIX and Windows this also
+ * happens by itself when the thread exits (a pthread TLS destructor, a fiber
+ * local storage callback); call it only on other targets, or to free the slot
+ * early. */
 void rtlog_thread_exit(void);
 void rtlog_push(const struct rtlog_site *site, const rtlog_writer *w);
 rtlog_span_t rtlog_span_enter(const struct rtlog_site *site);
 void rtlog_span_exit(rtlog_span_t span);
 size_t rtlog_drain(rtlog_write_fn write, void *user);
 uint32_t rtlog_dropped(void);
-/* Crash log (POSIX): on SIGSEGV, SIGFPE, SIGBUS, SIGILL or SIGABRT, write
- * every undrained record plus a CRASH record to a new file
+/* Crash log (POSIX, Windows): on SIGSEGV, SIGFPE, SIGBUS, SIGILL or SIGABRT
+ * (Windows: an unhandled exception such as an access violation, or abort()),
+ * write every undrained record plus a CRASH record to a new file
  * `<dir>/crash-<pid>-<n>.rtlog` (n counting from 1 per process), then let the
- * signal's default action run. `dir` must exist. Returns 0 on success. */
+ * default action end the process. `dir` must exist. Returns 0 on success. */
 int rtlog_crash_install(const char *dir);
 /* Write the same dump now, without crashing (e.g. from a watchdog). */
 void rtlog_crash_snapshot(const char *reason);
@@ -183,7 +185,18 @@ static inline void rtlog__str(rtlog_writer *w, const char *s) {
 
 /* ---- call-site descriptors ---------------------------------------------- */
 
-#define RTLOG__SECTION __attribute__((section("rtlog_sites"), used, aligned(sizeof(void *))))
+/* ELF: section `rtlog_sites`, bounded by the linker's __start_/__stop_ symbols.
+ * Mach-O: `__DATA,rtlog_sites`, bounded by section$start$/section$end$ symbols.
+ * PE: `rtlog$m`; the linker sorts it between the `rtlog$a` and `rtlog$z` markers
+ * of the implementation unit and merges the three into one `rtlog` section. */
+#if defined(__APPLE__)
+#define RTLOG__SECTION_NAME "__DATA,rtlog_sites,regular,no_dead_strip"
+#elif defined(_WIN32)
+#define RTLOG__SECTION_NAME "rtlog$m"
+#else
+#define RTLOG__SECTION_NAME "rtlog_sites"
+#endif
+#define RTLOG__SECTION __attribute__((section(RTLOG__SECTION_NAME), used, aligned(sizeof(void *))))
 #define RTLOG__SITE(lvl, kind_, fmt_, n)                                                       \
     __extension__({                                                                            \
         static const struct rtlog_site rtlog__site_ RTLOG__SECTION = {                        \
@@ -326,6 +339,19 @@ class Span {
 /* ======================================================================== */
 #ifdef RTLOG_IMPLEMENTATION
 
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <io.h>
+#include <signal.h>
+#include <stdlib.h>
+#include <sys/stat.h>
+#endif
+
 #ifdef __cplusplus
 #define RTLOG__TLS thread_local
 extern "C" {
@@ -333,7 +359,20 @@ extern "C" {
 #define RTLOG__TLS _Thread_local
 #endif
 
-#if defined(__unix__) || defined(__linux__)
+#if defined(__unix__) || defined(__linux__) || defined(__APPLE__)
+#define RTLOG__POSIX 1
+#endif
+
+#if defined(_WIN32)
+/* The performance counter as it is; its rate is read when the stream header is written. */
+static uint64_t rtlog__qpc(void) {
+    LARGE_INTEGER t;
+    QueryPerformanceCounter(&t);
+    return (uint64_t)t.QuadPart;
+}
+#define RTLOG__DEFAULT_NOW rtlog__qpc
+#define RTLOG__DEFAULT_HZ 0u
+#elif defined(RTLOG__POSIX)
 #include <time.h>
 static uint64_t rtlog__monotonic_ns(void) {
     struct timespec t;
@@ -376,8 +415,26 @@ struct rtlog__ring {
     uint8_t buf[RTLOG_RING_SIZE];
 };
 
+#if defined(__APPLE__)
+extern const struct rtlog_site rtlog__sites_start[] __asm("section$start$__DATA$rtlog_sites");
+extern const struct rtlog_site rtlog__sites_stop[] __asm("section$end$__DATA$rtlog_sites");
+#define RTLOG__SITES_START rtlog__sites_start
+#define RTLOG__SITES_COUNT ((uint32_t)(rtlog__sites_stop - rtlog__sites_start))
+#elif defined(_WIN32)
+/* All-zero descriptors before and after the real ones; the host skips them. */
+static const struct rtlog_site rtlog__pe_start
+    __attribute__((section("rtlog$a"), used, aligned(sizeof(void *)))) = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+static const struct rtlog_site rtlog__pe_stop
+    __attribute__((section("rtlog$z"), used, aligned(sizeof(void *)))) = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+#define RTLOG__SITES_START (&rtlog__pe_start + 1)
+#define RTLOG__SITES_COUNT ((uint32_t)(&rtlog__pe_stop - (&rtlog__pe_start + 1)))
+#else
 extern const struct rtlog_site __start_rtlog_sites[] __attribute__((weak));
 extern const struct rtlog_site __stop_rtlog_sites[] __attribute__((weak));
+#define RTLOG__SITES_START __start_rtlog_sites
+#define RTLOG__SITES_COUNT \
+    (__start_rtlog_sites ? (uint32_t)(__stop_rtlog_sites - __start_rtlog_sites) : 0)
+#endif
 
 int rtlog__level = RTLOG_LEVEL_TRACE;
 static int rtlog__spans = 1;
@@ -420,7 +477,7 @@ static void rtlog__set_name(struct rtlog__ring *r, const char *name) {
     r->name[n] = 0;
 }
 
-#if (defined(__unix__) || defined(__linux__)) && !defined(__ZEPHYR__) && !defined(RTLOG_NO_PTHREAD)
+#if defined(RTLOG__POSIX) && !defined(__ZEPHYR__) && !defined(RTLOG_NO_PTHREAD)
 #include <pthread.h>
 #define RTLOG__PTHREAD 1
 static pthread_key_t rtlog__key;
@@ -436,6 +493,30 @@ static void rtlog__key_dtor(void *p) {
     __atomic_store_n(&((struct rtlog__ring *)p)->state, RTLOG__CLOSED, __ATOMIC_RELEASE);
 }
 static void rtlog__key_make(void) { rtlog__key_ok = pthread_key_create(&rtlog__key, rtlog__key_dtor) == 0; }
+#elif defined(_WIN32)
+/* Windows: a fiber local storage slot; its callback runs when the thread exits
+ * and does what the pthread destructor above does. */
+#define RTLOG__FLS 1
+static uint32_t rtlog__fls; /* slot index + 1, atomic; 0 until the first thread claims a ring */
+static void WINAPI rtlog__fls_dtor(void *p) {
+    if (!p) return;
+    rtlog__mine = 0;
+    __atomic_store_n(&((struct rtlog__ring *)p)->state, RTLOG__CLOSED, __ATOMIC_RELEASE);
+}
+static void rtlog__fls_set(void *r) {
+    uint32_t slot = __atomic_load_n(&rtlog__fls, __ATOMIC_ACQUIRE);
+    if (!slot) {
+        DWORD made = FlsAlloc(rtlog__fls_dtor);
+        if (made == FLS_OUT_OF_INDEXES) return;
+        if (__atomic_compare_exchange_n(&rtlog__fls, &slot, (uint32_t)made + 1, 0, __ATOMIC_ACQ_REL,
+                                        __ATOMIC_ACQUIRE)) {
+            slot = (uint32_t)made + 1;
+        } else {
+            FlsFree(made); /* another thread made the slot first */
+        }
+    }
+    FlsSetValue(slot - 1, r);
+}
 #endif
 
 /* Claim a ring slot for the calling thread, named `name` (NULL: "thread-<ctx>").
@@ -475,6 +556,8 @@ static struct rtlog__ring *rtlog__claim_as(const char *name) {
 #ifdef RTLOG__PTHREAD
             pthread_once(&rtlog__key_once, rtlog__key_make);
             if (rtlog__key_ok) pthread_setspecific(rtlog__key, r);
+#elif defined(RTLOG__FLS)
+            rtlog__fls_set(r);
 #endif
             return r;
         }
@@ -502,6 +585,8 @@ void rtlog_thread_exit(void) {
         rtlog__mine = 0;
 #ifdef RTLOG__PTHREAD
         if (rtlog__key_ok) pthread_setspecific(rtlog__key, 0);
+#elif defined(RTLOG__FLS)
+        if (__atomic_load_n(&rtlog__fls, __ATOMIC_ACQUIRE)) rtlog__fls_set(0);
 #endif
     }
 }
@@ -544,7 +629,7 @@ static int rtlog__push_raw(struct rtlog__ring *r, uint32_t site, const uint8_t *
 }
 
 static uint32_t rtlog__site_id(const struct rtlog_site *s) {
-    return (uint32_t)(s - __start_rtlog_sites) + 1;
+    return (uint32_t)(s - RTLOG__SITES_START) + 1;
 }
 
 void rtlog_push(const struct rtlog_site *site, const rtlog_writer *w) {
@@ -600,13 +685,20 @@ static uint32_t rtlog__fnv(const uint8_t *p, size_t n) {
 
 /* The 17-byte stream header for this binary's contract and clock. */
 static void rtlog__header(uint8_t h[17]) {
-    uint32_t n = __start_rtlog_sites ? (uint32_t)(__stop_rtlog_sites - __start_rtlog_sites) : 0, hash = 0;
+    uint32_t n = RTLOG__SITES_COUNT, hash = 0, hz = rtlog__hz;
     for (uint32_t id = 1; id <= n; id++) hash += rtlog__fnv((const uint8_t *)&id, 4);
+#if defined(_WIN32)
+    if (!hz) { /* the default clock: ticks of the performance counter */
+        LARGE_INTEGER f;
+        QueryPerformanceFrequency(&f);
+        hz = (uint32_t)f.QuadPart;
+    }
+#endif
     memset(h, 0, 17);
     memcpy(h, "RTL1", 4);
     h[4] = 1;
     memcpy(h + 6, &hash, 4);
-    memcpy(h + 10, &rtlog__hz, 4);
+    memcpy(h + 10, &hz, 4);
     h[14] = (uint8_t)sizeof(void *);
 }
 
@@ -705,12 +797,31 @@ out:
     return frames;
 }
 
-/* ---- crash log (POSIX) ---------------------------------------------------- */
-#if defined(__unix__) || defined(__linux__)
+/* ---- crash log (POSIX, Windows) ------------------------------------------- */
+#if defined(RTLOG__POSIX) || defined(_WIN32)
+#if defined(_WIN32)
+/* The C runtime's low-level I/O: thin wrappers over CreateFile and WriteFile. */
+#define RTLOG__OPEN(path) \
+    _open(path, _O_WRONLY | _O_CREAT | _O_EXCL | _O_BINARY | _O_NOINHERIT, _S_IREAD | _S_IWRITE)
+#define RTLOG__WRITE(fd, b, n) _write(fd, b, (unsigned)(n))
+#define RTLOG__CLOSE(fd) _close(fd)
+#define RTLOG__PID() ((uint32_t)GetCurrentProcessId())
+#define RTLOG__SLEEP_MS() Sleep(1)
+#else
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <unistd.h>
+#define RTLOG__OPEN(path) open(path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0644)
+#define RTLOG__WRITE(fd, b, n) write(fd, b, n)
+#define RTLOG__CLOSE(fd) close(fd)
+#define RTLOG__PID() ((uint32_t)getpid())
+#define RTLOG__SLEEP_MS()                    \
+    do {                                     \
+        struct timespec rtlog__ts = {0, 1000000}; \
+        nanosleep(&rtlog__ts, 0);            \
+    } while (0)
+#endif
 
 #define RTLOG__CTRL_CRASH 0xFFFFFF07u
 
@@ -730,7 +841,7 @@ static uint32_t rtlog__crash_soft;
 static int rtlog__fd_write(void *user, const uint8_t *b, size_t n) {
     int fd = (int)(intptr_t)user;
     while (n) {
-        ssize_t w = write(fd, b, n);
+        long w = (long)RTLOG__WRITE(fd, b, n);
         if (w <= 0) return 1;
         b += w;
         n -= (size_t)w;
@@ -798,7 +909,7 @@ static size_t rtlog__put_dec(char *out, size_t n, uint32_t v) {
  * async-signal-safe). */
 static int rtlog__crash_open(void) {
     char path[sizeof rtlog__crash_prefix + 10 + 1 + 10 + 7];
-    uint32_t pid = (uint32_t)getpid();
+    uint32_t pid = RTLOG__PID();
     size_t pl = strlen(rtlog__crash_prefix);
     for (int tries = 0; tries < 1000; tries++) {
         uint32_t n = __atomic_fetch_add(&rtlog__crash_next, 1, __ATOMIC_ACQ_REL);
@@ -808,14 +919,15 @@ static int rtlog__crash_open(void) {
         path[k++] = '-';
         k = rtlog__put_dec(path, k, n);
         memcpy(path + k, ".rtlog", 7);
-        int fd = open(path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0644);
+        int fd = RTLOG__OPEN(path);
         if (fd >= 0) return fd;
         if (errno != EEXIST) return -1;
     }
     return -1;
 }
 
-static void rtlog__crash_dump(uint8_t kind, int sig, int code, uint64_t addr, const char *msg, int fatal) {
+static void rtlog__crash_dump(uint8_t kind, int sig, int code, uint64_t addr, uint64_t pc, const char *msg,
+                              int fatal) {
     if (!rtlog__crash_prefix[0]) return;
     int fd = rtlog__crash_open();
     if (fd < 0) return;
@@ -851,15 +963,83 @@ static void rtlog__crash_dump(uint8_t kind, int sig, int code, uint64_t addr, co
     memcpy(b + n, &sig, 4), n += 4;
     memcpy(b + n, &code, 4), n += 4;
     memcpy(b + n, &addr, 8), n += 8;
-    memset(b + n, 0, 8), n += 8; /* program counter: not portable from C */
+    memcpy(b + n, &pc, 8), n += 8; /* 0 on POSIX: not portable from C */
     size_t ml = msg ? strnlen(msg, 127) : 0;
     b[n++] = (uint8_t)ml;
     memcpy(b + n, msg, ml), n += ml;
     rtlog__fd_write(u, b, n);
-    close(fd);
+    RTLOG__CLOSE(fd);
     __atomic_fetch_add(&rtlog__crash_written, 1, __ATOMIC_ACQ_REL);
 }
 
+static uint32_t rtlog__crash_done;
+
+/* The one fatal dump of the process. A second fatal event (another thread, or a
+ * fault inside the dump) does not dump again: it lets the first finish before
+ * the default action ends the process (about two seconds at most). */
+static void rtlog__crash_fatal_dump(int sig, int code, uint64_t addr, uint64_t pc, const char *msg) {
+    if (!__atomic_exchange_n(&rtlog__crash_fatal, 1, __ATOMIC_ACQ_REL)) {
+        __atomic_store_n(&rtlog__level, RTLOG_LEVEL_OFF, __ATOMIC_RELAXED); /* freeze */
+        rtlog__crash_dump(2, sig, code, addr, pc, msg, 1);
+        __atomic_store_n(&rtlog__crash_done, 1, __ATOMIC_RELEASE);
+    } else {
+        for (int i = 0; i < 2000 && !__atomic_load_n(&rtlog__crash_done, __ATOMIC_ACQUIRE); i++)
+            RTLOG__SLEEP_MS();
+    }
+}
+
+static int rtlog__crash_set_dir(const char *dir) {
+    size_t n = strlen(dir);
+    if (n + 1 + 6 + 1 > sizeof rtlog__crash_prefix) return -1;
+    memcpy(rtlog__crash_prefix, dir, n);
+#if defined(_WIN32)
+    if (n && dir[n - 1] != '/' && dir[n - 1] != '\\') rtlog__crash_prefix[n++] = '/';
+#else
+    if (n && dir[n - 1] != '/') rtlog__crash_prefix[n++] = '/';
+#endif
+    memcpy(rtlog__crash_prefix + n, "crash-", 7);
+    return 0;
+}
+
+#if defined(_WIN32)
+static LPTOP_LEVEL_EXCEPTION_FILTER rtlog__crash_previous;
+
+static const char *rtlog__exception_name(DWORD code) {
+    switch (code) {
+    case EXCEPTION_ACCESS_VIOLATION: return "EXCEPTION_ACCESS_VIOLATION: invalid memory access";
+    case EXCEPTION_IN_PAGE_ERROR: return "EXCEPTION_IN_PAGE_ERROR: a page could not be loaded";
+    case EXCEPTION_INT_DIVIDE_BY_ZERO: return "EXCEPTION_INT_DIVIDE_BY_ZERO: integer division by zero";
+    case EXCEPTION_ILLEGAL_INSTRUCTION: return "EXCEPTION_ILLEGAL_INSTRUCTION: illegal instruction";
+    case EXCEPTION_STACK_OVERFLOW: return "EXCEPTION_STACK_OVERFLOW: stack overflow";
+    default: return "unhandled exception";
+    }
+}
+
+/* Called by the system for an exception that no handler took, on the faulting
+ * thread, before the process is ended. */
+static LONG WINAPI rtlog__on_exception(EXCEPTION_POINTERS *ep) {
+    const EXCEPTION_RECORD *er = ep->ExceptionRecord;
+    uint64_t addr = 0;
+    if ((er->ExceptionCode == EXCEPTION_ACCESS_VIOLATION || er->ExceptionCode == EXCEPTION_IN_PAGE_ERROR) &&
+        er->NumberParameters >= 2)
+        addr = (uint64_t)er->ExceptionInformation[1];
+    rtlog__crash_fatal_dump(0, (int)er->ExceptionCode, addr, (uint64_t)(uintptr_t)er->ExceptionAddress,
+                            rtlog__exception_name(er->ExceptionCode));
+    return rtlog__crash_previous ? rtlog__crash_previous(ep) : EXCEPTION_CONTINUE_SEARCH;
+}
+
+/* abort() raises SIGABRT inside the C runtime, not an exception; it ends the
+ * process when this handler returns. */
+static void rtlog__on_abort(int sig) {
+    rtlog__crash_fatal_dump(sig, 0, 0, 0, "SIGABRT: abort");
+}
+
+int rtlog_crash_install(const char *dir) {
+    if (rtlog__crash_set_dir(dir) != 0) return -1;
+    rtlog__crash_previous = SetUnhandledExceptionFilter(rtlog__on_exception);
+    return signal(SIGABRT, rtlog__on_abort) == SIG_ERR ? -1 : 0;
+}
+#else
 static const char *rtlog__signal_name(int sig) {
     switch (sig) {
     case SIGSEGV: return "SIGSEGV: invalid memory access";
@@ -871,22 +1051,10 @@ static const char *rtlog__signal_name(int sig) {
     }
 }
 
-static uint32_t rtlog__crash_done;
-
 static void rtlog__on_signal(int sig, siginfo_t *si, void *uc) {
     (void)uc;
-    if (!__atomic_exchange_n(&rtlog__crash_fatal, 1, __ATOMIC_ACQ_REL)) {
-        __atomic_store_n(&rtlog__level, RTLOG_LEVEL_OFF, __ATOMIC_RELAXED); /* freeze */
-        rtlog__crash_dump(2, sig, si ? si->si_code : 0, si ? (uint64_t)(uintptr_t)si->si_addr : 0,
-                          rtlog__signal_name(sig), 1);
-        __atomic_store_n(&rtlog__crash_done, 1, __ATOMIC_RELEASE);
-    } else {
-        /* Another thread is dumping: let it finish before the default action ends the
-         * process (about two seconds at most). */
-        struct timespec ts = {0, 1000000};
-        for (int i = 0; i < 2000 && !__atomic_load_n(&rtlog__crash_done, __ATOMIC_ACQUIRE); i++)
-            nanosleep(&ts, 0);
-    }
+    rtlog__crash_fatal_dump(sig, si ? si->si_code : 0, si ? (uint64_t)(uintptr_t)si->si_addr : 0, 0,
+                            rtlog__signal_name(sig));
     /* Restore the default action and re-raise; the signal is blocked while this
      * handler runs, so it takes effect when the handler returns. (Not SA_RESETHAND:
      * it would kill a second faulting thread before it could wait.) */
@@ -895,11 +1063,7 @@ static void rtlog__on_signal(int sig, siginfo_t *si, void *uc) {
 }
 
 int rtlog_crash_install(const char *dir) {
-    size_t n = strlen(dir);
-    if (n + 1 + 6 + 1 > sizeof rtlog__crash_prefix) return -1;
-    memcpy(rtlog__crash_prefix, dir, n);
-    if (n && dir[n - 1] != '/') rtlog__crash_prefix[n++] = '/';
-    memcpy(rtlog__crash_prefix + n, "crash-", 7);
+    if (rtlog__crash_set_dir(dir) != 0) return -1;
     static const int sigs[] = {SIGSEGV, SIGBUS, SIGFPE, SIGILL, SIGABRT};
     for (size_t i = 0; i < sizeof sigs / sizeof sigs[0]; i++) {
         struct sigaction sa;
@@ -911,15 +1075,16 @@ int rtlog_crash_install(const char *dir) {
     }
     return 0;
 }
+#endif /* signals or exceptions */
 
 void rtlog_crash_snapshot(const char *reason) {
     if (__atomic_load_n(&rtlog__crash_fatal, __ATOMIC_ACQUIRE)) return;
     if (__atomic_fetch_add(&rtlog__crash_soft, 1, __ATOMIC_ACQ_REL) >= RTLOG_MAX_SOFT_DUMPS) return;
-    rtlog__crash_dump(3, 0, 0, 0, reason, 0);
+    rtlog__crash_dump(3, 0, 0, 0, 0, reason, 0);
 }
 
 uint32_t rtlog_crash_dumps(void) { return __atomic_load_n(&rtlog__crash_written, __ATOMIC_ACQUIRE); }
-#endif /* POSIX crash log */
+#endif /* crash log */
 
 #ifdef __cplusplus
 } /* extern "C" */

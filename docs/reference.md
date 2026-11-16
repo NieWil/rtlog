@@ -76,7 +76,7 @@ Validates a contract and prints its site count and hash, the same hash the strea
 rtlog contract --elf <binary> [-o <contract.jsonl>]
 ```
 
-Reads the site descriptors from an **ELF** binary (Linux programs, embedded firmware) and writes the contract. Mach-O (macOS) and PE (Windows) binaries are not read; there, have the program call `rtlog::contract::write(path)` at startup.
+Reads the site descriptors from the binary that was built and writes the contract: **ELF** (Linux programs, embedded firmware), **Mach-O** (macOS; of a universal binary, the first architecture) or **PE** (Windows `.exe` and `.dll`). `--binary` is another spelling of `--elf`. Rust and C/C++ sites are both read. A Rust program can instead call `rtlog::contract::write(path)` at startup.
 
 ## JSON lines output
 

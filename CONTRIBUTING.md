@@ -40,7 +40,8 @@ Every pull request runs these checks in CI, and all of them must pass before mer
 | Line coverage at least 97 % | `cargo llvm-cov`, reported to [Codecov](https://codecov.io/gh/NieWil/rtlog) | `codecov.yml`, ci.yml |
 | Memory safety of the unsafe ring code | Miri, AddressSanitizer, ThreadSanitizer | ci.yml |
 | Spec rules: real-time hot path, wire format, usability, size budgets | `scripts/spec_check.py` | `docs/spec.md` |
-| C/C++: build with `-Wall -Wextra -Werror`, end-to-end and crash tests | `scripts/c_e2e.sh` | |
+| C/C++: build with `-Wall -Wextra -Werror`, end-to-end and crash tests on Linux (GCC, Clang), macOS (Apple Clang) and Windows (MinGW-w64 GCC) | `scripts/c_e2e.sh` | |
+| Zephyr module: build for `qemu_cortex_m3`, run in QEMU, decode the UART capture | `scripts/zephyr_qemu.sh` (needs west, a Zephyr workspace and the Zephyr SDK) | ci.yml, job `zephyr-qemu` |
 | C/C++ static analysis | `clang-tidy` | `.clang-tidy` |
 | Dependencies: advisories, licences, sources | `cargo deny check` | `deny.toml` |
 | Spelling | `typos` | `_typos.toml` |

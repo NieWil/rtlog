@@ -34,7 +34,9 @@ In `prj.conf`:
 
 ```ini
 CONFIG_RTLOG=y
-# the default transport writes the binary stream to the console UART
+# the default transport writes the binary stream to the console UART:
+# keep text off it (the boot banner selects PRINTK, so it goes too)
+CONFIG_BOOT_BANNER=n
 CONFIG_PRINTK=n
 CONFIG_LOG=n
 ```
@@ -78,6 +80,18 @@ cat /dev/ttyACM0 > app.rtlog          # or your RTT / probe tool's capture
 rtlog decode --contract app.contract.jsonl app.rtlog
 rtlog decode --contract app.contract.jsonl --perfetto -o app.json app.rtlog
 ```
+
+## Try it without a board (QEMU)
+
+[`scripts/zephyr_qemu.sh`](../scripts/zephyr_qemu.sh) builds the `hello` sample for `qemu_cortex_m3`, runs it in QEMU for 5 seconds with the UART written to a file, reads the contract from `zephyr.elf` and decodes the capture. It needs `west`, a Zephyr workspace (`ZEPHYR_BASE`) and the Zephyr SDK with the `arm-zephyr-eabi` toolchain; CI runs it on every pull request (job `Zephyr (qemu_cortex_m3)`, Zephyr 4.5.0, SDK 1.0.1).
+
+```sh
+export ZEPHYR_BASE=~/zephyrproject/zephyr
+scripts/zephyr_qemu.sh
+# Zephyr QEMU end-to-end OK (hello, 5 s): 518 records, 518 spans, 3 contexts, 0 dropped; ...
+```
+
+Extra arguments go to `west build` and CMake, for example `scripts/zephyr_qemu.sh -p always -DCONFIG_RTLOG_RING_SIZE=4096`.
 
 ## Options
 

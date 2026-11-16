@@ -10,10 +10,10 @@
 //! `std`, `spawn_drain` runs one on a background thread, or call
 //! `Drain::poll` yourself; on `no_std`, call [`drain::drain_ring`] from the
 //! idle loop. The contract comes from `contract::write` (any OS) or from the
-//! binary (`rtlog contract --elf`, ELF only).
+//! binary (`rtlog contract --elf`: ELF, Mach-O or PE).
 //!
 //! - Default feature `std`: per-thread rings created on first use, the drain
-//!   thread, `contract`, and on Unix the `crash` handler.
+//!   thread, `contract`, and on Unix and Windows the `crash` handler.
 //! - `default-features = false`: `no_std`, no allocation; static [`Ring`]s and
 //!   explicit producers (`info!(to: &mut producer, ...)`).
 //!
@@ -57,7 +57,7 @@ pub mod wire;
 
 #[cfg(feature = "std")]
 pub mod contract;
-#[cfg(all(feature = "std", unix))]
+#[cfg(all(feature = "std", any(unix, windows)))]
 pub mod crash;
 #[cfg(feature = "std")]
 mod runtime;

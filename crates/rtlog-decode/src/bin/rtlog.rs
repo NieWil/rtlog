@@ -20,8 +20,9 @@ const USAGE: &str = "usage:
 
   --json and --perfetto are short for --out json and --out perfetto.
   Perfetto output opens in https://ui.perfetto.dev (Open trace file).
-  `contract --elf` reads ELF binaries (Linux, embedded firmware). On macOS and
-  Windows, have the program write its contract with rtlog::contract::write(path).";
+  `contract --elf` reads the binary that was built: ELF (Linux, firmware),
+  Mach-O (macOS) or PE (Windows); `--binary` is the same option. A Rust
+  program can also write its contract with rtlog::contract::write(path).";
 
 /// Write to stdout; a closed pipe (`| head`) ends output quietly instead of panicking.
 fn write_stdout(s: &str) {
@@ -129,15 +130,15 @@ fn run(args: &[String]) -> Result<(), String> {
             let mut it = args[1..].iter();
             while let Some(a) = it.next() {
                 match a.as_str() {
-                    "--elf" => elf = it.next().cloned(),
+                    "--elf" | "--binary" => elf = it.next().cloned(),
                     "-o" | "--output" => out_file = it.next().cloned(),
                     s => return Err(format!("unknown argument {s}\n{USAGE}")),
                 }
             }
             let path = elf.ok_or(USAGE)?;
             let data = std::fs::read(&path).map_err(|e| format!("{path}: {e}"))?;
-            let jsonl =
-                rtlog_decode::elf::contract_from_elf(&data).map_err(|e| format!("{path}: {e}"))?;
+            let jsonl = rtlog_decode::elf::contract_from_binary(&data)
+                .map_err(|e| format!("{path}: {e}"))?;
             let c = Contract::from_jsonl(&jsonl)
                 .map_err(|e| format!("{path}: extracted contract is invalid: {e}"))?;
             match out_file {
