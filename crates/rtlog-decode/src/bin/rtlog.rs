@@ -5,6 +5,7 @@
 //!              [--color auto|always|never] [--no-spans] [--force] app.rtlog
 //! rtlog check  app.contract.jsonl
 //! rtlog contract --elf firmware.elf -o firmware.contract.jsonl
+//! rtlog verify --contract firmware.contract.jsonl firmware.bin
 //! ```
 
 use std::io::{IsTerminal, Write};
@@ -17,12 +18,15 @@ const USAGE: &str = "usage:
                [--color auto|always|never] [--no-spans] [--force] <stream.rtlog>
   rtlog check <contract.jsonl>
   rtlog contract --elf <binary> [-o <contract.jsonl>]
+  rtlog verify --contract <contract.jsonl> <image>...
 
   --json and --perfetto are short for --out json and --out perfetto.
   Perfetto output opens in https://ui.perfetto.dev (Open trace file).
   `contract --elf` reads the binary that was built: ELF (Linux, firmware),
   Mach-O (macOS) or PE (Windows); `--binary` is the same option. A Rust
-  program can also write its contract with rtlog::contract::write(path).";
+  program can also write its contract with rtlog::contract::write(path).
+  `verify` fails if an image that ships (a flashed .bin, a stripped binary)
+  still holds a format string of the contract; see docs/strip.md.";
 
 /// Write to stdout; a closed pipe (`| head`) ends output quietly instead of panicking.
 fn write_stdout(s: &str) {
@@ -151,6 +155,47 @@ fn run(args: &[String]) -> Result<(), String> {
                 c.hash()
             );
             Ok(())
+        }
+        Some("verify") => {
+            let mut contract = None;
+            let mut images = Vec::new();
+            let mut it = args[1..].iter();
+            while let Some(a) = it.next() {
+                match a.as_str() {
+                    "--contract" => contract = it.next().cloned(),
+                    s if s.starts_with('-') => return Err(format!("unknown option {s}\n{USAGE}")),
+                    s => images.push(s.to_owned()),
+                }
+            }
+            let contract = load_contract(&contract.ok_or(USAGE)?)?;
+            if images.is_empty() {
+                return Err(USAGE.to_owned());
+            }
+            let mut leaks = 0;
+            for path in &images {
+                let image = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+                let v = contract.verify_stripped(&image);
+                for site in &v.found {
+                    eprintln!(
+                        "{path}: contains the format string of site {} ({}:{}): {:?}",
+                        site.id, site.file, site.line, site.fmt
+                    );
+                }
+                leaks += v.found.len();
+                write_stdout(&format!(
+                    "{path}: {} of {} format strings found in the image ({} shorter than {} bytes not searched for)\n",
+                    v.found.len(),
+                    v.found.len() + v.absent,
+                    v.skipped,
+                    rtlog_decode::VERIFY_MIN_LEN
+                ));
+            }
+            match leaks {
+                0 => Ok(()),
+                n => Err(format!(
+                    "{n} format string(s) ship in the image; it is not stripped"
+                )),
+            }
         }
         Some("-h" | "--help" | "help") => {
             write_stdout(&format!("{USAGE}\n"));

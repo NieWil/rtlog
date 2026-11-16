@@ -17,7 +17,7 @@ You write `println!`-style log lines. The device writes a few binary bytes into 
 
 ## Why
 
-- **Cheap on the device.** A log call takes 36 cycles (11 ns) on x86-64 and 46 on arm64, 6–8× less than formatting the line. On Cortex-M4F, 10 messages take 3.3 KB of flash against 18.3 KB with `core::fmt`. [Numbers →](docs/performance.md)
+- **Cheap on the device.** A log call takes 36 cycles (11 ns) on x86-64 and 46 on arm64, 6–8× less than formatting the line. On Cortex-M4F, 10 messages take 3.3 KB of flash against 18.3 KB with `core::fmt`, and 0.7 KB less once the [format strings are stripped](docs/strip.md) from the image. [Numbers →](docs/performance.md)
 - **Never in the way.** Each thread or task owns its ring. A full ring drops and counts; it never blocks an ISR or a control loop.
 - **More than text.** Spans, typed fields and per-thread timelines export straight to Perfetto. [See a real app traced →](docs/use-cases/perfetto.md)
 - **One format everywhere.** Rust (`no_std` and `std`), C, C++ and Zephyr all write the same stream and use the same decoder.
@@ -94,6 +94,7 @@ cargo run --release -p rtlog-examples --example perfetto_quickstart
 | [`c/examples`](c/examples) | The same from C and C++ |
 | [`stdout_mode`](examples/stdout_mode.rs) | Read logs as text on stdout, like `env_logger`, with binary log calls |
 | [`timing`](examples/timing.rs) | Cost per call in ns and cycles on your machine |
+| [`stripped`](examples/stripped.rs) | A program that ships without its format strings (`strip` feature) |
 
 ## How it works
 
@@ -110,6 +111,7 @@ Each call site gets an ID at build time; its format string goes into a contract.
 | [Embedded Rust](docs/embedded.md) | `no_std` setup, linker snippet, getting the contract from firmware |
 | [C and C++](docs/c-cpp.md) | Header-only producer for Linux, macOS, Windows and bare metal: build, capture, decode |
 | [Zephyr](docs/zephyr.md) | Module, Kconfig, transports |
+| [Ship without the format strings](docs/strip.md) | Stripped builds: a smaller image with no log text in it, and `rtlog verify` as a release gate |
 | [Configuration and CLI](docs/reference.md) | Levels, environment variables, features, every `rtlog` command and option, the JSON output |
 | [Performance and size](docs/performance.md) | Cycles per call, flash and RAM, measuring on your board |
 | [Results from users' boards](results/README.md) | Timing reports from real hardware; [add yours](CONTRIBUTING.md#share-your-boards-results) |
@@ -132,7 +134,7 @@ Each call site gets an ID at build time; its format string goes into a contract.
 
 ## Status
 
-v0.2 preview. Every CI run tests Rust, C and C++ on Linux, macOS and Windows, Rust on arm64, ARMv7, RISC-V and x86 under QEMU, and the Zephyr module on an emulated Cortex-M3. Each run also includes a 2-minute soak test, Miri, and Thread and Address sanitizers. Not yet there: `derive(Log)`, the `log` / `tracing` / `defmt` bridges, per-module levels, and stripping format strings from shipped binaries. [Roadmap →](docs/roadmap.md)
+v0.2 preview. Every CI run tests Rust, C and C++ on Linux, macOS and Windows, Rust on arm64, ARMv7, RISC-V and x86 under QEMU, and the Zephyr module on an emulated Cortex-M3. Each run also includes a 2-minute soak test, Miri, and Thread and Address sanitizers. Not yet there: `derive(Log)`, the `log` / `tracing` / `defmt` bridges and per-module levels. [Roadmap →](docs/roadmap.md)
 
 ## Licence
 

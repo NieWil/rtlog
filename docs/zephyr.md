@@ -91,7 +91,11 @@ scripts/zephyr_qemu.sh
 # Zephyr QEMU end-to-end OK (hello, 5 s): 518 records, 518 spans, 3 contexts, 0 dropped; ...
 ```
 
-Extra arguments go to `west build` and CMake, for example `scripts/zephyr_qemu.sh -p always -DCONFIG_RTLOG_RING_SIZE=4096`.
+Extra arguments go to `west build` and CMake, for example `scripts/zephyr_qemu.sh -p always -DCONFIG_RTLOG_RING_SIZE=4096`. With `-DCONFIG_RTLOG_STRIP=y` the script also checks that `zephyr.bin` holds no format string.
+
+## Keep format strings out of the image
+
+`CONFIG_RTLOG_STRIP=y` places the descriptors and their strings in Zephyr's `DEVNULL_REGION`: they are in `zephyr.elf`, where `rtlog contract --elf` reads them, and not in `zephyr.bin` or `zephyr.hex`. On `qemu_cortex_m3` the `hello` sample (4 call sites) goes from 10124 to 9912 bytes. It needs `CONFIG_LINKER_DEVNULL_SUPPORT` (Cortex-M, 32-bit RISC-V) and records no function names. Details: [Ship without the format strings](strip.md).
 
 ## Options
 

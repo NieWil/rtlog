@@ -5,9 +5,12 @@
 //!   event by event. After a damaged frame decoding resumes at the next resync
 //!   frame and the gap is reported.
 //! - [`stdout::init`]: text on stdout while the program runs, like `env_logger`.
-//! - [`elf::contract_from_elf`]: the contract from an ELF binary or firmware.
+//! - [`elf::contract_from_binary`]: the contract from an ELF, Mach-O or PE
+//!   binary, firmware included.
+//! - [`Contract::verify_stripped`]: check that a stripped image ships no
+//!   format string.
 //! - The `rtlog` command-line tool (`cargo install rtlog-decode`): `rtlog decode`,
-//!   `rtlog check`, `rtlog contract`; see the
+//!   `rtlog check`, `rtlog contract`, `rtlog verify`; see the
 //!   [CLI reference](https://github.com/NieWil/rtlog/blob/main/docs/reference.md).
 //!
 //! ```
@@ -35,7 +38,7 @@ pub mod value;
 use std::collections::HashMap;
 use std::fmt::Write as _;
 
-pub use contract::{Contract, ContractError, Kind, SiteInfo};
+pub use contract::{Contract, ContractError, Kind, SiteInfo, Stripped, VERIFY_MIN_LEN};
 pub use stream::{Crash, DecodeError, Decoder, Event, Record, Session};
 pub use value::Value;
 

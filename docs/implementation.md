@@ -18,15 +18,16 @@ This file tracks how the code in `crates/` matches [the specification](spec.md):
 | 10c Benchmark model: workloads W1–W5, timing report, Criterion | Built (host only) | `examples/timing.rs`, `benches/` |
 | Verification: soak test, Miri, ThreadSanitizer, AddressSanitizer | Built | `tests/soak.rs`, CI jobs `miri`, `sanitizers`, `soak` |
 | 4 Contract from the image (`cargo rtlog contract`) | Built as `rtlog contract --elf`, for Rust and C descriptors, PIE relocations applied | `rtlog-decode/src/elf.rs` |
+| 4 Stripping | Built for ELF: `strip` feature, `RTLOG_STRIP`, `CONFIG_RTLOG_STRIP`, `rtlog verify` | `rtlog/src/lib.rs` (`__site_static`), `c/include/rtlog.h`, `c/rtlog_strip.ld`, `c/zephyr/rtlog_sites.ld` |
 | 8b Debug stdout, crash log (Unix; C on POSIX) | Built: one numbered file per dump, rings read without waiting for the drain | `rtlog_decode::stdout`, `rtlog::crash`, `rtlog_crash_install` |
-| C / C++ producer, Zephyr module | Built (Zephyr not CI-built) | `c/include/rtlog.h`, `c/zephyr`, `zephyr/module.yml` |
+| C / C++ producer, Zephyr module | Built (Zephyr sample run on `qemu_cortex_m3` in CI) | `c/include/rtlog.h`, `c/zephyr`, `zephyr/module.yml` |
 | 10c Benchmarks in cycles, size on Cortex-M4F | Built | `examples/timing.rs`, `size/mcu`, `scripts/size_report.py` |
-| 5 compression, AEAD; 8b MCU crash capture; 10 `log` / `tracing` / `defmt` bridges and OTLP / CTF outputs; shared memory; contract stripping | Not yet | [Roadmap](roadmap.md) |
+| 5 compression, AEAD; 8b MCU crash capture; 10 `log` / `tracing` / `defmt` bridges and OTLP / CTF outputs; shared memory | Not yet | [Roadmap](roadmap.md) |
 
 ## Deviations from the spec
 
 1. **Argument types travel on the wire.** Each argument is one tag byte plus its value, and the contract records the argument count (`nargs`) instead of the type list. A `macro_rules!` macro cannot see argument types at expansion time, and a `static` cannot depend on them. The site ID therefore hashes module, file, line, column, format string, level and `nargs`. Cost: one byte per argument.
-2. **The contract comes from the binary's descriptors.** Sites are collected with `linkme` into a link section. `rtlog::contract::write(path)` writes the JSON-lines file at runtime (`std`), and `rtlog contract --elf <image>` reads the same descriptors from any ELF image, firmware included, and from Mach-O and PE binaries. Stripping them (`cargo rtlog verify`) is not built yet, so **format strings are still present in v0.2 binaries** and threat V2 is open.
+2. **The contract comes from the binary's descriptors.** Sites are collected with `linkme` into a link section. `rtlog::contract::write(path)` writes the JSON-lines file at runtime (`std`), and `rtlog contract --elf <image>` reads the same descriptors from any ELF image, firmware included, and from Mach-O and PE binaries. Format strings are present in binaries by default. A stripped build ([guide](strip.md)) keeps descriptors and strings out of the loaded image at link time, where the first design had a post-build tool (`cargo rtlog verify`): strings in `.rodata` cannot be removed after linking. `rtlog verify` remains as the check on the shipped image.
 3. **Not yet in the argument model:** `#[derive(Log)]`, `intern!`, `{:display}` / `{:debug}` (tier 4), and `#[rtlog(redact)]`.
 4. **Dynamic strings and byte slices are capped at 127 bytes.** The length byte uses bit 7 as the truncation flag, so the spec's `{:str<256>}` override cannot be encoded. Truncation keeps strings on a UTF-8 boundary.
 5. **Ring frames carry a 2-byte length prefix inside the ring** so the drain always hands whole frames to the transport. It never goes on the wire. Only `DropNewest` is implemented.

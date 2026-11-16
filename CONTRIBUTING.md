@@ -41,7 +41,8 @@ Every pull request runs these checks in CI, and all of them must pass before mer
 | Memory safety of the unsafe ring code | Miri, AddressSanitizer, ThreadSanitizer | ci.yml |
 | Spec rules: real-time hot path, wire format, usability, size budgets | `scripts/spec_check.py` | `docs/spec.md` |
 | C/C++: build with `-Wall -Wextra -Werror`, end-to-end and crash tests on Linux (GCC, Clang), macOS (Apple Clang) and Windows (MinGW-w64 GCC) | `scripts/c_e2e.sh` | |
-| Zephyr module: build for `qemu_cortex_m3`, run in QEMU, decode the UART capture | `scripts/zephyr_qemu.sh` (needs west, a Zephyr workspace and the Zephyr SDK) | ci.yml, job `zephyr-qemu` |
+| Stripped builds (Rust `strip` feature, C `RTLOG_STRIP`): contract, `objcopy`, `rtlog verify`, run, decode | `scripts/strip_e2e.sh` (needs GNU ld) | |
+| Zephyr module, unstripped and with `CONFIG_RTLOG_STRIP=y`: build for `qemu_cortex_m3`, run in QEMU, decode the UART capture | `scripts/zephyr_qemu.sh` (needs west, a Zephyr workspace and the Zephyr SDK) | ci.yml, job `zephyr-qemu` |
 | C/C++ static analysis | `clang-tidy` | `.clang-tidy` |
 | Dependencies: advisories, licences, sources | `cargo deny check` | `deny.toml` |
 | Spelling | `typos` | `_typos.toml` |

@@ -75,6 +75,32 @@ impl Site {
 }
 
 impl Site {
+    /// This descriptor with its three strings read from other storage: the
+    /// `strip` feature keeps each site's strings in statics of the
+    /// `rtlog_strs` section. The ID stays the hash of the original strings.
+    #[doc(hidden)]
+    pub const fn __with_strings(
+        self,
+        module: &'static str,
+        file: &'static str,
+        fmt: &'static str,
+    ) -> Site {
+        Site {
+            id: self.id,
+            kind: self.kind,
+            level: self.level,
+            nargs: self.nargs,
+            _reserved: 0,
+            line: self.line,
+            column: self.column,
+            module,
+            file,
+            fmt,
+        }
+    }
+}
+
+impl Site {
     /// Build a span site; `name` is shown as the slice name on the host.
     pub const fn span(
         module: &'static str,
@@ -141,8 +167,15 @@ pub const fn span_id(module: &str, file: &str, line: u32, column: u32, name: &st
 pub static SITES: [Site];
 
 /// Every site linked into this binary.
+///
+/// Empty with the `strip` feature: the descriptors may not be in the loaded
+/// image then, so rtlog never reads them; the host reads them from the
+/// binary (`rtlog contract --elf`).
 pub fn sites() -> &'static [Site] {
-    &SITES
+    #[cfg(not(feature = "strip"))]
+    return &SITES;
+    #[cfg(feature = "strip")]
+    &[]
 }
 
 /// Order-independent hash of a set of site IDs; written in the stream header
@@ -152,9 +185,14 @@ pub fn contract_hash_of(ids: impl IntoIterator<Item = u32>) -> u32 {
         .fold(0u32, |acc, id| acc.wrapping_add(fnv1a32(&id.to_le_bytes())))
 }
 
-/// Contract hash of this binary.
+/// Contract hash of this binary, written in the stream header.
+///
+/// 0 with the `strip` feature, which the decoder reads as "not stated": the
+/// descriptors are not read at run time. Site IDs are content hashes, so a
+/// capture decoded against the wrong contract still fails, at the first
+/// frame whose ID the contract does not have.
 pub fn contract_hash() -> u32 {
-    contract_hash_of(SITES.iter().map(|s| s.id))
+    contract_hash_of(sites().iter().map(|s| s.id))
 }
 
 /// Two distinct sites sharing an ID, if any.

@@ -142,6 +142,8 @@ SECTIONS
 
 The log path never reads a descriptor: a site's ID is a compile-time constant. The stream header's contract hash does read them once, so they must be loaded.
 
+To keep descriptors and format strings out of flash altogether (40 B per call site plus its strings; 740 B for 10 call sites in [`size/mcu`](../size/mcu)), build with the `strip` feature and mark the sections `(INFO)` instead: see [Ship without the format strings](strip.md).
+
 ## Get the contract and decode
 
 Save the raw bytes from the board to `capture.rtlog`. Start the capture before you reset the board, so the file begins with the stream header.

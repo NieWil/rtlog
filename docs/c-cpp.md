@@ -92,7 +92,7 @@ Supported argument types: `bool`, `char`, all integer types, `float`, `double`, 
 
 - GCC or Clang: Linux, macOS, Windows (MinGW-w64, or Clang for the MSVC ABI), Zephyr, bare metal. Not Microsoft's `cl.exe`.
 - Little-endian only.
-- Format strings remain in `.rodata`; stripping them from shipped images is on the roadmap.
+- Format strings are in `.rodata` by default. On ELF targets, `-DRTLOG_STRIP` and a linker script keep them and the descriptors out of the shipped image: see [Ship without the format strings](strip.md).
 - On Zephyr and bare metal, a finished thread keeps its ring slot until `rtlog_thread_exit()`.
 
 For Zephyr, see [Zephyr](zephyr.md).

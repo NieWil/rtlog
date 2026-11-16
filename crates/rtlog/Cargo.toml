@@ -13,6 +13,11 @@ categories = ["development-tools::debugging", "embedded", "no-std"]
 [features]
 default = ["std"]
 std = []
+# Format strings leave the shipped image: each site's strings go into their
+# own `rtlog_strs` section next to the descriptors, a linker script keeps both
+# sections out of the loaded image, and rtlog never reads a descriptor at run
+# time. Enable it in the final binary only; see docs/strip.md.
+strip = []
 
 [dependencies]
 linkme = "0.3"

@@ -306,6 +306,7 @@ version = "0.2.5"
 dependencies = [
  "criterion",
  "libc",
+ "memchr",
  "object",
  "rtlog",
  "serde",

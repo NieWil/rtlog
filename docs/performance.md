@@ -27,7 +27,7 @@ A log call costs 6–8× less than formatting the same line, and meets the spec'
 
 ## Size on a microcontroller
 
-[`size/mcu`](../size/mcu) is a minimal Cortex-M4F firmware built in four variants: no logging, rtlog with 1 and 10 call sites, and the same 10 messages formatted with `core::fmt`. [`scripts/size_report.py`](../scripts/size_report.py) builds them and reads the section sizes. CI posts the table on the `size (Cortex-M4F)` job page.
+[`size/mcu`](../size/mcu) is a minimal Cortex-M4F firmware built in five variants: no logging, rtlog with 1 and 10 call sites, the 10 call sites with the `strip` feature, and the same 10 messages formatted with `core::fmt`. [`scripts/size_report.py`](../scripts/size_report.py) builds them and reads the section sizes. CI posts the table on the `size (Cortex-M4F)` job page.
 
 | Variant (`thumbv7em-none-eabihf`, `opt-level = "s"`, LTO) | Code | Read-only data | Site descriptors | Flash total | RAM |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -40,6 +40,7 @@ A log call costs 6–8× less than formatting the same line, and meets the spec'
 - Each additional call site: about **56 B** of code, plus a 40 B descriptor that only the host reads.
 - RAM: the ring you choose (1 KiB here) plus 48 B of state.
 - 10 messages cost **3.3 KB** of flash with rtlog against **18.3 KB** with `core::fmt`: 5.6× smaller.
+- With the `strip` feature the descriptors and their strings are not in flash: the 10-call-site firmware takes 3 796 B against 4 536 B unstripped (both built with rustc 1.97.0; the table above is from an earlier compiler), 740 B or 16 % less. [How to strip →](strip.md)
 
 ## Measure on your platform
 

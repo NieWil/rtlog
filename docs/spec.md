@@ -67,7 +67,7 @@ C and C++ use the same model through `c/include/rtlog.h`: `RTLOG_INFO("x={}", x)
 
 **What it buys over printf**
 
-- Flash: formatting code is gone (5.6× less flash for 10 messages on Cortex-M4F, section 10c). Format strings stay in the image until stripping lands (roadmap, section 4).
+- Flash: formatting code is gone (5.6× less flash for 10 messages on Cortex-M4F, section 10c). Format strings are in the image by default; a stripped build keeps them in the ELF file only (section 4, [guide](strip.md)).
 - Speed: tens of nanoseconds per call; never blocks an ISR or a control loop.
 - Archive: a `.rtlog` capture is 2–10× smaller than text and keeps typed fields.
 - One format for Rust, C, C++ and Zephyr, one decoder, one viewer.
@@ -151,12 +151,13 @@ A site ID is a 32-bit content hash, so the scheme works on every target and obje
 
 1. Each macro call emits one `static` descriptor into a link section collected by `linkme` (`linkme_SITES` on ELF, the equivalent Mach-O and PE sections). C and C++ emit `struct rtlog_site` into `rtlog_sites` (ELF, and `__DATA,rtlog_sites` on Mach-O) or `rtlog` (PE, between two all-zero marker entries). No files are written at expansion time, so parallel crate builds cannot race.
 2. `rtlog contract --elf <image>` reads the descriptors of an ELF, Mach-O or PE image with the `object` crate, applies the load-time pointer fix-ups of position-independent executables (`RELATIVE` relocations on ELF, rebases and chained fixups on Mach-O), validates them and writes the JSON-lines contract. On Mach-O and PE a Rust descriptor is recognised by its ID, which must equal the hash of its other fields: the section name is a hash there (Mach-O) or shared by every `linkme` slice of the program (PE). On `std`, `rtlog::contract::write` writes the same file from the running program.
-3. The descriptor section ships in the image: binaries are self-describing, and format strings are present in them. Stripping is on the roadmap.
+3. By default the descriptor section ships in the image: binaries are self-describing, and format strings are present in them.
+4. A stripped build (ELF; Rust feature `strip`, C `RTLOG_STRIP`, Zephyr `CONFIG_RTLOG_STRIP`) puts each site's strings into an `rtlog_strs` section instead of `.rodata`, and its linker script marks that section and the descriptor section as not loaded (`(INFO)`; `(COPY)` in Zephyr's `DEVNULL_REGION`). Both stay in the ELF file, where step 2 reads them (string pointers are resolved in `rtlog_strs` first, because LLD starts every non-loaded section at address 0), and neither is in the flashed image. The runtime then never reads a descriptor: in Rust `site::sites()` is empty, `contract::write` fails and the header's `contract_hash` is 0; in C the hash needs only the number of sites, a link-time constant, and `func` is null. `rtlog verify --contract <contract> <image>` fails if an image holds a format string of the contract (strings under 6 bytes are not searched for). Measured on Cortex-M4F with 10 call sites: 4536 B of flash unstripped, 3796 B stripped ([guide](strip.md)).
 
 **Binding stream to contract**
 
 - The stream header carries `contract_hash` (hash of every site ID) and `scheme` (0 = hash32; 1 is reserved).
-- The decoder refuses a mismatch unless run with `--force`, then marks every line decoded under a mismatched contract.
+- The decoder refuses a mismatch unless run with `--force`, then marks every line decoded under a mismatched contract. A `contract_hash` of 0 means "not stated" and is not checked: a stripped Rust build cannot hash descriptors it does not load. Its site IDs are content hashes, so a wrong contract still fails at the first frame whose ID it lacks.
 - Two independent version numbers: `wire_version` in the stream header changes only for frame-grammar changes; the contract's field set changes for descriptor-format changes. New control frames take new IDs; old ones stay decodable.
 
 ## 5. Wire format
@@ -170,7 +171,7 @@ Arguments are written fixed-width so every site has a compile-time maximum frame
 | magic | 4 B | `RTL1` |
 | wire\_version | u8 | frame grammar version (1) |
 | scheme | u8 | 0 = hash32 IDs (1 reserved for linker-assigned IDs) |
-| contract\_hash | u32 | hash of the contract's site IDs |
+| contract\_hash | u32 | hash of the contract's site IDs; 0 = not stated (stripped Rust build) |
 | clock\_hz | u32 | timestamp tick rate |
 | ptr\_width | u8 | 4 or 8, drives `usize` width |
 | flags | u8 | 0; bits reserved for drain compression and authenticated or encrypted blocks |
@@ -363,7 +364,7 @@ The design removes the classic log attack surface (format-string injection) and 
 | # | Threat | Severity | Mitigation | Status |
 | --- | --- | --- | --- | --- |
 | V1 | Contract leak: anyone with it reads every capture | High | Store it with the ELF under build-pipeline access control | Practice |
-| V2 | Format strings ship in the image | High | Strip the descriptor section post-build | Open (roadmap) |
+| V2 | Format strings ship in the image | High | Stripped build: descriptors and strings in non-loaded sections; `rtlog verify` on the shipped image | Implemented, opt-in (ELF) |
 | V3, V4 | Stream capture or tampering on an untrusted transport | Medium | AEAD blocks | Open (roadmap) |
 | V5 | Malformed stream crashes the decoder | Medium | Untrusted parsing, capped lengths, mutation test in CI | Implemented |
 | V6 | Malicious contract JSON | Medium | Loader validates every entry; rejects, never partially applies | Implemented |
@@ -429,6 +430,7 @@ Budgets are stated in CPU cycles, because a call's cost is a cycle count and its
 | 16 | Crash log | Read-only dump of every ring's unread tail + `crash` frame, one numbered file per dump, from a panic hook and async-signal-safe handlers, never waiting for the drain |
 | 17 | C / C++ | Header-only producer; site ID = descriptor index; contract read from the ELF; pthread destructor frees thread slots |
 | 18 | Budgets in CI | Sizes gated; cycles reported |
+| 19 | Stripping | Link-time, not post-build: strings in their own section, both sections not loaded by the linker script. A post-build tool cannot remove strings from `.rodata` without relinking. Header hash 0 = not stated, rather than loading 4 bytes per site only to hash them |
 
 **Sources**
 

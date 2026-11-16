@@ -528,3 +528,73 @@ fn contract_rejects_bad_arguments_and_non_elf_files() {
         .unwrap();
     assert!(failed(&out).starts_with(&format!("{}: ", not_elf.display())));
 }
+
+#[test]
+fn verify_passes_only_when_no_format_string_is_in_the_image() {
+    let dir = Scratch::new("verify");
+    let (contract, _) = dir.contract_and_stream();
+    let verify = |image: &Path| {
+        rtlog_cmd()
+            .arg("verify")
+            .arg("--contract")
+            .arg(&contract)
+            .arg(image)
+            .output()
+            .unwrap()
+    };
+
+    // An image without any log text.
+    let clean = dir.file("clean.bin", &[0x5au8; 4096]);
+    let out = verify(&clean);
+    let report = succeeded(&out);
+    assert!(
+        report.starts_with(&format!("{}: 0 of ", clean.display())),
+        "{report}"
+    );
+    assert!(
+        report.contains("format strings found in the image"),
+        "{report}"
+    );
+
+    // This test binary is not stripped: it holds its own format strings.
+    let exe = std::env::current_exe().unwrap();
+    let out = verify(&exe);
+    let err = failed(&out);
+    assert!(err.contains("contains the format string of site"), "{err}");
+    assert!(err.contains("\"cli speed={} ok={}\""), "{err}");
+    assert!(
+        err.trim_end()
+            .ends_with("format string(s) ship in the image; it is not stripped"),
+        "{err}"
+    );
+}
+
+#[test]
+fn verify_rejects_bad_arguments() {
+    let dir = Scratch::new("verify-bad");
+    let (contract, _) = dir.contract_and_stream();
+    let out = rtlog_cmd().arg("verify").output().unwrap();
+    assert!(failed(&out).starts_with("usage:"));
+    // A contract but no image.
+    let out = rtlog_cmd()
+        .arg("verify")
+        .arg("--contract")
+        .arg(&contract)
+        .output()
+        .unwrap();
+    assert!(failed(&out).starts_with("usage:"));
+    let out = rtlog_cmd()
+        .args(["verify", "--frob", "x"])
+        .output()
+        .unwrap();
+    assert!(failed(&out).starts_with("unknown option --frob\nusage:"));
+    let missing = dir.0.join("missing.bin");
+    let out = rtlog_cmd()
+        .arg("verify")
+        .arg("--contract")
+        .arg(&contract)
+        .arg(&missing)
+        .output()
+        .unwrap();
+    assert!(failed(&out).starts_with(&format!("{}: ", missing.display())));
+}
