@@ -84,4 +84,3 @@ Since 0.2.6. `rtlog::crash::install(dir)` and `rtlog_crash_install(dir)` registe
 | `TerminateProcess`, power loss | no | |
 
 Differences from Unix: the dump runs on the faulting thread's stack (there is no alternate stack to switch to); the process then ends with the exception code as its exit status (`0xC0000005`), not a signal; a filter installed before rtlog's is called after the dump. The directory path may contain any Unicode characters (the file is opened with a wide-character path).
-

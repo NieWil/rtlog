@@ -33,7 +33,7 @@
 #include <stdint.h>
 #include <string.h>
 
-#if !defined(__GNUC__)
+#if !defined(__GNUC__) && !defined(__clang__) /* Clang for the MSVC ABI does not define __GNUC__ */
 #error "rtlog.h needs GCC or Clang (section attributes and __atomic builtins)"
 #endif
 #if __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__
@@ -347,6 +347,7 @@ class Span {
 #include <errno.h>
 #include <fcntl.h>
 #include <io.h>
+#include <share.h>
 #include <signal.h>
 #include <stdlib.h>
 #include <sys/stat.h>
@@ -801,8 +802,15 @@ out:
 #if defined(RTLOG__POSIX) || defined(_WIN32)
 #if defined(_WIN32)
 /* The C runtime's low-level I/O: thin wrappers over CreateFile and WriteFile. */
-#define RTLOG__OPEN(path) \
-    _open(path, _O_WRONLY | _O_CREAT | _O_EXCL | _O_BINARY | _O_NOINHERIT, _S_IREAD | _S_IWRITE)
+static int rtlog__win_open(const char *path) {
+    int fd = -1;
+    /* Create only (never overwrite), binary, not inherited; other processes may read. */
+    if (_sopen_s(&fd, path, _O_CREAT | _O_EXCL | _O_RDWR | _O_BINARY | _O_NOINHERIT, _SH_DENYWR,
+                 _S_IREAD | _S_IWRITE) != 0)
+        return -1;
+    return fd;
+}
+#define RTLOG__OPEN(path) rtlog__win_open(path)
 #define RTLOG__WRITE(fd, b, n) _write(fd, b, (unsigned)(n))
 #define RTLOG__CLOSE(fd) _close(fd)
 #define RTLOG__PID() ((uint32_t)GetCurrentProcessId())
