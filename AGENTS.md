@@ -12,7 +12,7 @@ rtlog is a deferred logger. A log call writes a few binary bytes into a per-thre
 | `crates/rtlog-decode` | Host decoder library and the `rtlog` CLI (`src/bin/rtlog.rs`). |
 | `c/include/rtlog.h` | Single-header C/C++ implementation, same wire format. `c/zephyr`: Zephyr module. |
 | `examples/` | Runnable examples (not published). `size/mcu`: Cortex-M4F size firmware. |
-| `scripts/` | `spec_check.py` (spec rules), `c_e2e.sh` (C end-to-end), `size_report.py`, `results.py` (board results), `build_deb.sh` (Debian packages, with `packaging/debian/`), demo `run.sh`. |
+| `scripts/` | `spec_check.py` (spec rules), `c_e2e.sh` (C end-to-end), `zephyr_qemu.sh` (Zephyr sample on QEMU), `size_report.py`, `results.py` (board results), `build_deb.sh` (Debian packages, with `packaging/debian/`), demo `run.sh`. |
 | `docs/` | Guides, `spec.md` (what is built), `roadmap.md` (what is not), `implementation.md` (deviations). |
 | `results/` | Timing results from users' boards, one file per board and version. |
 
@@ -28,6 +28,7 @@ cargo test --workspace
 cargo build -p rtlog --no-default-features --target thumbv7em-none-eabihf --release   # no_std
 python3 scripts/spec_check.py                                  # real-time, wire, usability rules
 scripts/c_e2e.sh gcc g++                                       # if c/ or the wire format changed
+scripts/zephyr_qemu.sh                                         # if c/ changed; needs west, Zephyr and its SDK
 cargo llvm-cov --workspace --summary-only                      # line coverage must stay >= 97 %
 cargo deny check && typos && actionlint && shellcheck scripts/*.sh scripts/demo/*.sh
 ```

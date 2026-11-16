@@ -17,9 +17,19 @@
 //! are always written; panics and snapshots stop after [`MAX_SOFT_DUMPS`] per
 //! process, so a service that catches a panic per request cannot fill the disk.
 //!
-//! What it covers: panics (including integer division by zero in Rust),
-//! `SIGSEGV`, `SIGBUS`, `SIGFPE`, `SIGILL` and `SIGABRT` (so `abort()` and
-//! `panic = "abort"` too). It cannot see `SIGKILL` or power loss.
+//! What it covers on Unix: panics (including integer division by zero in
+//! Rust), `SIGSEGV`, `SIGBUS`, `SIGFPE`, `SIGILL` and `SIGABRT` (so `abort()`
+//! and `panic = "abort"` too). It cannot see `SIGKILL` or power loss.
+//!
+//! On Windows (since 0.2.6): panics, and exceptions that no handler takes
+//! (access violation, hardware division by zero, illegal instruction), through
+//! `SetUnhandledExceptionFilter`; the dump runs on the faulting thread's
+//! stack, and the record holds the exception code, the faulting address and
+//! the program counter. The C runtime's `abort()` is dumped as `SIGABRT`.
+//! Not dumped there: [`std::process::abort`] and a stack overflow, which end
+//! the process with a fail-fast that no handler sees (a panic under
+//! `panic = "abort"` is dumped by the panic hook before the abort), and
+//! `TerminateProcess`.
 //!
 //! How it stays safe inside a signal handler: it allocates nothing, takes no
 //! blocking lock (only `try_lock`), formats nothing, reads the rings without
@@ -32,7 +42,7 @@
 //! exit status shows the signal). On a panic the previous panic hook runs
 //! after the dump, and logging keeps working.
 //!
-//! The fatal dump runs on its own stack of [`SIGNAL_STACK`] bytes with a guard
+//! On Unix the fatal dump runs on its own stack of [`SIGNAL_STACK`] bytes with a guard
 //! page below it, mapped by [`install`]: the handler claims the dump on the
 //! crashing thread's signal stack, then switches to the dump stack (x86-64 and
 //! aarch64), so the dump does not depend on which thread crashed. The default
@@ -42,12 +52,15 @@
 //! stack, which [`install`] enlarges to [`SIGNAL_STACK`] for the calling thread
 //! and every thread that logs after it.
 
+#[cfg(unix)]
 use std::cell::OnceCell;
-use std::ffi::CString;
 use std::io;
+#[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};
+#[cfg(unix)]
+use std::sync::atomic::AtomicPtr;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, TryLockError};
 
 use crate::ring::FRAME_MAX;
@@ -55,7 +68,8 @@ use crate::runtime::{Shared, FAST, REGISTRY, RINGS};
 use crate::varint;
 use crate::wire::{self, Header, HEADER_LEN};
 
-/// Signals the handler is installed for.
+/// Signals the handler is installed for (Unix).
+#[cfg(unix)]
 pub const SIGNALS: [i32; 5] = [
     libc::SIGSEGV,
     libc::SIGBUS,
@@ -71,9 +85,16 @@ pub const CRASH_SNAPSHOT: u8 = 3;
 /// Fatal signals ignore the cap.
 pub const MAX_SOFT_DUMPS: u32 = 16;
 
+/// One unit of a path as the system's `open` takes it: a byte on Unix, a
+/// UTF-16 code unit on Windows.
+#[cfg(unix)]
+type PathUnit = u8;
+#[cfg(windows)]
+type PathUnit = u16;
+
 /// `<dir>/crash-`; a dump appends `<pid>-<n>.rtlog`, with the pid read when
 /// the dump is written (it differs in a forked child).
-static PREFIX: OnceLock<CString> = OnceLock::new();
+static PREFIX: OnceLock<Vec<PathUnit>> = OnceLock::new();
 static HEADER: OnceLock<[u8; HEADER_LEN]> = OnceLock::new();
 /// Next number to try in a dump's name.
 static NEXT: AtomicU32 = AtomicU32::new(1);
@@ -87,9 +108,11 @@ static FATAL: AtomicBool = AtomicBool::new(false);
 /// Set when the fatal dump is finished.
 static DUMP_DONE: AtomicBool = AtomicBool::new(false);
 
-/// Bytes of alternate signal stack the handler runs on (see the module docs).
+/// Bytes of alternate signal stack the handler runs on (see the module docs; Unix).
+#[cfg(unix)]
 pub const SIGNAL_STACK: usize = 64 * 1024;
 
+#[cfg(unix)]
 thread_local! {
     /// This thread's own signal stack, if it needed one; unmapped at thread exit.
     static OWN_STACK: OnceCell<Option<SignalStack>> = const { OnceCell::new() };
@@ -98,6 +121,7 @@ thread_local! {
 /// Give the calling thread a [`SIGNAL_STACK`]-byte alternate signal stack
 /// unless it already has one at least that large. Called by [`install`] and
 /// when a thread registers its ring; does nothing before [`install`].
+#[cfg(unix)]
 pub(crate) fn prepare_thread() {
     if PREFIX.get().is_none() {
         return;
@@ -109,12 +133,14 @@ pub(crate) fn prepare_thread() {
 
 /// An `mmap`ed alternate signal stack with a guard page below it, so an
 /// overflow faults instead of overwriting whatever lies below.
+#[cfg(unix)]
 struct SignalStack {
     base: *mut libc::c_void,
     len: usize,
     sp: *mut libc::c_void,
 }
 
+#[cfg(unix)]
 impl SignalStack {
     fn new() -> Option<SignalStack> {
         // SAFETY: plain sigaltstack/mmap/mprotect calls on memory we own.
@@ -159,6 +185,7 @@ impl SignalStack {
     }
 }
 
+#[cfg(unix)]
 impl Drop for SignalStack {
     fn drop(&mut self) {
         // SAFETY: as above; the stack is disabled before it is unmapped.
@@ -192,28 +219,40 @@ impl Drop for SignalStack {
 pub fn install(dir: impl AsRef<Path>) -> io::Result<()> {
     let dir = dir.as_ref();
     std::fs::create_dir_all(dir)?;
-    let mut prefix = dir.as_os_str().as_bytes().to_vec();
-    if !prefix.ends_with(b"/") {
-        prefix.push(b'/');
+    #[cfg(unix)]
+    let mut prefix: Vec<PathUnit> = dir.as_os_str().as_bytes().to_vec();
+    #[cfg(windows)]
+    let mut prefix: Vec<PathUnit> =
+        std::os::windows::ffi::OsStrExt::encode_wide(dir.as_os_str()).collect();
+    let ends_with = |p: &[PathUnit], c: u8| p.last() == Some(&PathUnit::from(c));
+    if !(ends_with(&prefix, b'/') || cfg!(windows) && ends_with(&prefix, b'\\')) {
+        prefix.push(PathUnit::from(b'/'));
     }
-    prefix.extend_from_slice(b"crash-");
+    prefix.extend(b"crash-".iter().map(|&c| PathUnit::from(c)));
     if prefix.len() > PREFIX_MAX {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "crash directory path is too long (200 bytes at most)",
         ));
     }
-    let c = CString::new(prefix)
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "path contains a NUL byte"))?;
-    if PREFIX.set(c).is_err() {
+    if prefix.contains(&0) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "path contains a NUL byte",
+        ));
+    }
+    if PREFIX.set(prefix).is_err() {
         return Err(io::Error::new(
             io::ErrorKind::AlreadyExists,
             "rtlog crash handler already installed",
         ));
     }
     HEADER.get_or_init(|| Header::new(crate::site::contract_hash(), crate::clock::hz()).encode());
-    map_dump_stack();
-    prepare_thread();
+    #[cfg(unix)]
+    {
+        map_dump_stack();
+        prepare_thread();
+    }
 
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -223,6 +262,9 @@ pub fn install(dir: impl AsRef<Path>) -> io::Result<()> {
         previous(info);
     }));
 
+    #[cfg(windows)]
+    windows::install();
+    #[cfg(unix)]
     for sig in SIGNALS {
         // SAFETY: a zeroed sigaction is valid; we fill handler, flags and mask.
         unsafe {
@@ -280,6 +322,7 @@ fn write_coverage_profile() {
     }
 }
 
+#[cfg(unix)]
 /// Arguments of the fatal signal dump, passed to [`signal_dump`] through a pointer.
 struct SignalDump {
     sig: i32,
@@ -288,6 +331,7 @@ struct SignalDump {
     pc: u64,
 }
 
+#[cfg(unix)]
 /// The fatal signal dump, called on the dump stack by [`on_dump_stack`].
 extern "C" fn signal_dump(arg: *mut libc::c_void) {
     // SAFETY: `on_signal` passes a pointer to a live `SignalDump`.
@@ -303,10 +347,12 @@ extern "C" fn signal_dump(arg: *mut libc::c_void) {
     );
 }
 
+#[cfg(unix)]
 /// Top of the dump stack: [`SIGNAL_STACK`] bytes with a guard page below,
 /// mapped by [`install`]. Null when it could not be mapped.
 static DUMP_STACK_TOP: AtomicPtr<u8> = AtomicPtr::new(core::ptr::null_mut());
 
+#[cfg(unix)]
 /// Map the dump stack once. A fatal dump runs on it whatever stack the
 /// crashing thread has: a thread that never logged still has the small
 /// default signal stack, too small for a debug build's dump.
@@ -341,6 +387,7 @@ fn map_dump_stack() {
     }
 }
 
+#[cfg(unix)]
 /// Call `f(arg)` on the dump stack, or on the current stack where it is not
 /// mapped or the architecture has no stack switch here (then the per-thread
 /// signal stack from [`prepare_thread`] is what the dump runs on).
@@ -386,6 +433,7 @@ unsafe fn on_dump_stack(f: extern "C" fn(*mut libc::c_void), arg: *mut libc::c_v
     f(arg);
 }
 
+#[cfg(unix)]
 extern "C" fn on_signal(sig: i32, info: *mut libc::siginfo_t, uctx: *mut libc::c_void) {
     // SAFETY: the kernel passes a valid siginfo for SA_SIGINFO handlers.
     let (addr, code) = unsafe {
@@ -424,11 +472,12 @@ unsafe fn fault_addr(info: *mut libc::siginfo_t) -> u64 {
     (*info).si_addr() as u64
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "android")))]
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
 unsafe fn fault_addr(info: *mut libc::siginfo_t) -> u64 {
     (*info).si_addr as u64
 }
 
+#[cfg(unix)]
 #[allow(unused_variables)]
 fn pc_of(uctx: *mut libc::c_void) -> u64 {
     if uctx.is_null() {
@@ -446,6 +495,7 @@ fn pc_of(uctx: *mut libc::c_void) -> u64 {
     0
 }
 
+#[cfg(unix)]
 fn signal_name(sig: i32) -> &'static str {
     match sig {
         libc::SIGSEGV => "SIGSEGV: invalid memory access",
@@ -460,7 +510,11 @@ fn signal_name(sig: i32) -> &'static str {
 fn write_all(fd: i32, mut b: &[u8]) {
     while !b.is_empty() {
         // SAFETY: `b` is a valid buffer; write(2) is async-signal-safe.
+        #[cfg(unix)]
         let n = unsafe { libc::write(fd, b.as_ptr().cast(), b.len()) };
+        // SAFETY: as above; the C runtime's `_write` takes a 32-bit count.
+        #[cfg(windows)]
+        let n = unsafe { libc::write(fd, b.as_ptr().cast(), b.len().min(1 << 30) as u32) };
         if n > 0 {
             b = &b[n as usize..];
         } else if n < 0 && io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
@@ -492,7 +546,7 @@ const PREFIX_MAX: usize = 200;
 const PATH_BUF: usize = PREFIX_MAX + 10 + 1 + 10 + 6 + 1;
 
 /// Append `v` in decimal at `buf[i..]`; returns the new length.
-fn put_dec(buf: &mut [u8], mut i: usize, mut v: u32) -> usize {
+fn put_dec(buf: &mut [PathUnit], mut i: usize, mut v: u32) -> usize {
     let mut digits = [0u8; 10];
     let mut n = 0;
     loop {
@@ -505,21 +559,22 @@ fn put_dec(buf: &mut [u8], mut i: usize, mut v: u32) -> usize {
     }
     while n > 0 {
         n -= 1;
-        buf[i] = digits[n];
+        buf[i] = PathUnit::from(digits[n]);
         i += 1;
     }
     i
 }
 
 /// `<prefix><pid>-<n>.rtlog\0` into `buf`, without allocating or formatting.
-fn dump_path(buf: &mut [u8; PATH_BUF], prefix: &[u8], pid: u32, n: u32) -> usize {
+fn dump_path(buf: &mut [PathUnit; PATH_BUF], prefix: &[PathUnit], pid: u32, n: u32) -> usize {
     buf[..prefix.len()].copy_from_slice(prefix);
     let mut i = put_dec(buf, prefix.len(), pid);
-    buf[i] = b'-';
+    buf[i] = PathUnit::from(b'-');
     i = put_dec(buf, i + 1, n);
-    let suffix = b".rtlog";
-    buf[i..i + suffix.len()].copy_from_slice(suffix);
-    i += suffix.len();
+    for &c in b".rtlog" {
+        buf[i] = PathUnit::from(c);
+        i += 1;
+    }
     buf[i] = 0;
     i + 1
 }
@@ -527,14 +582,15 @@ fn dump_path(buf: &mut [u8; PATH_BUF], prefix: &[u8], pid: u32, n: u32) -> usize
 /// Create the next dump file: `O_EXCL`, so an existing file (an earlier run
 /// that shared this pid, as in containers) is never touched; the number moves
 /// on instead. Returns the descriptor.
-fn open_dump(prefix: &[u8]) -> Option<i32> {
+fn open_dump(prefix: &[PathUnit]) -> Option<i32> {
     // SAFETY: getpid(2) is async-signal-safe.
     let pid = unsafe { libc::getpid() } as u32;
-    let mut path = [0u8; PATH_BUF];
+    let mut path: [PathUnit; PATH_BUF] = [0; PATH_BUF];
     for _ in 0..1_000 {
         let n = NEXT.fetch_add(1, Ordering::AcqRel);
         dump_path(&mut path, prefix, pid, n);
         // SAFETY: open(2) is async-signal-safe; `path` is NUL-terminated.
+        #[cfg(unix)]
         let fd = unsafe {
             libc::open(
                 path.as_ptr().cast(),
@@ -542,30 +598,62 @@ fn open_dump(prefix: &[u8]) -> Option<i32> {
                 0o644 as libc::c_uint,
             )
         };
+        // SAFETY: `path` is NUL-terminated UTF-16. The C runtime's `_wopen`
+        // is a thin layer over `CreateFileW`; binary mode, so no byte is
+        // translated.
+        #[cfg(windows)]
+        let fd = unsafe {
+            libc::wopen(
+                path.as_ptr(),
+                libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_BINARY | libc::O_NOINHERIT,
+                libc::S_IREAD | libc::S_IWRITE,
+            )
+        };
         if fd >= 0 {
             return Some(fd);
         }
-        if io::Error::last_os_error().raw_os_error() != Some(libc::EEXIST) {
+        if !exists_error() {
             return None;
         }
     }
     None
 }
 
+/// Whether the `open` that just failed did so because the file exists.
+#[cfg(unix)]
+fn exists_error() -> bool {
+    io::Error::last_os_error().raw_os_error() == Some(libc::EEXIST)
+}
+
+/// Whether the `open` that just failed did so because the file exists
+/// (`ERROR_FILE_EXISTS`, which `CreateFileW` reports for `CREATE_NEW`).
+#[cfg(windows)]
+fn exists_error() -> bool {
+    io::Error::last_os_error().raw_os_error() == Some(80)
+}
+
 /// Block (without sleeping in a lock) until the fatal dump in progress is done
 /// or about two seconds pass: a second crashing thread must not race the first
 /// one to the default action, which ends the process mid-write.
 fn wait_for_dump() {
-    let ts = libc::timespec {
-        tv_sec: 0,
-        tv_nsec: 1_000_000,
-    };
     for _ in 0..2_000 {
         if DUMP_DONE.load(Ordering::Acquire) {
             return;
         }
-        // SAFETY: nanosleep(2) is async-signal-safe.
-        unsafe { libc::nanosleep(&ts, core::ptr::null_mut()) };
+        #[cfg(unix)]
+        {
+            let ts = libc::timespec {
+                tv_sec: 0,
+                tv_nsec: 1_000_000,
+            };
+            // SAFETY: nanosleep(2) is async-signal-safe.
+            unsafe { libc::nanosleep(&ts, core::ptr::null_mut()) };
+        }
+        // SAFETY: Sleep has no preconditions.
+        #[cfg(windows)]
+        unsafe {
+            windows::Sleep(1)
+        };
     }
 }
 
@@ -655,7 +743,7 @@ fn dump_body(kind: u8, sig: i32, code: i32, addr: u64, pc: u64, msg: &str, fatal
     let (Some(prefix), Some(header)) = (PREFIX.get(), HEADER.get()) else {
         return;
     };
-    let Some(fd) = open_dump(prefix.as_bytes()) else {
+    let Some(fd) = open_dump(prefix) else {
         if fatal {
             fatal_dump_done();
         }
@@ -733,7 +821,106 @@ fn dump_body(kind: u8, sig: i32, code: i32, addr: u64, pc: u64, msg: &str, fatal
     }
 }
 
-#[cfg(test)]
+/// The Windows side: an unhandled-exception filter in place of signal handlers.
+#[cfg(windows)]
+mod windows {
+    use super::{claim_fatal, dump_body, wire};
+    use core::ffi::c_void;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// `EXCEPTION_RECORD`.
+    #[repr(C)]
+    pub(super) struct ExceptionRecord {
+        code: u32,
+        flags: u32,
+        record: *mut ExceptionRecord,
+        address: *mut c_void,
+        parameters: u32,
+        information: [usize; 15],
+    }
+
+    /// `EXCEPTION_POINTERS`.
+    #[repr(C)]
+    pub(super) struct ExceptionPointers {
+        record: *const ExceptionRecord,
+        context: *mut c_void,
+    }
+
+    type Filter = unsafe extern "system" fn(*const ExceptionPointers) -> i32;
+
+    extern "system" {
+        fn SetUnhandledExceptionFilter(filter: Option<Filter>) -> Option<Filter>;
+        pub(super) fn Sleep(milliseconds: u32);
+    }
+
+    const ACCESS_VIOLATION: u32 = 0xC000_0005;
+    const IN_PAGE_ERROR: u32 = 0xC000_0006;
+    /// Return value of a filter that leaves the exception to the next one.
+    const CONTINUE_SEARCH: i32 = 0;
+
+    /// The filter that was installed before ours, as an address; 0 for none.
+    static PREVIOUS: AtomicUsize = AtomicUsize::new(0);
+
+    fn exception_name(code: u32) -> &'static str {
+        match code {
+            ACCESS_VIOLATION => "EXCEPTION_ACCESS_VIOLATION: invalid memory access",
+            IN_PAGE_ERROR => "EXCEPTION_IN_PAGE_ERROR: a page could not be loaded",
+            0xC000_0094 => "EXCEPTION_INT_DIVIDE_BY_ZERO: integer division by zero",
+            0xC000_001D => "EXCEPTION_ILLEGAL_INSTRUCTION: illegal instruction",
+            _ => "unhandled exception",
+        }
+    }
+
+    /// Called by the system on the faulting thread for an exception that no
+    /// handler took, before it ends the process.
+    unsafe extern "system" fn on_exception(info: *const ExceptionPointers) -> i32 {
+        // SAFETY: the system passes valid exception pointers.
+        let record = unsafe { info.as_ref().and_then(|i| i.record.as_ref()) };
+        if let Some(r) = record {
+            // Access violations and in-page errors carry the data address.
+            let addr = if matches!(r.code, ACCESS_VIOLATION | IN_PAGE_ERROR) && r.parameters >= 2 {
+                r.information[1] as u64
+            } else {
+                0
+            };
+            if claim_fatal() {
+                dump_body(
+                    wire::CRASH_SIGNAL,
+                    0,
+                    r.code as i32,
+                    addr,
+                    r.address as u64,
+                    exception_name(r.code),
+                    true,
+                );
+            }
+        }
+        match PREVIOUS.load(Ordering::Acquire) {
+            0 => CONTINUE_SEARCH,
+            // SAFETY: the address of the filter `SetUnhandledExceptionFilter` returned.
+            previous => unsafe { core::mem::transmute::<usize, Filter>(previous)(info) },
+        }
+    }
+
+    /// `abort()` of the C runtime raises `SIGABRT` in the process instead of
+    /// an exception; the runtime ends the process when this returns.
+    extern "C" fn on_abort(sig: i32) {
+        if claim_fatal() {
+            dump_body(wire::CRASH_SIGNAL, sig, 0, 0, 0, "SIGABRT: abort", true);
+        }
+    }
+
+    pub(super) fn install() {
+        // SAFETY: both calls only register a handler.
+        unsafe {
+            let previous = SetUnhandledExceptionFilter(Some(on_exception));
+            PREVIOUS.store(previous.map_or(0, |f| f as usize), Ordering::Release);
+            libc::signal(libc::SIGABRT, on_abort as *const () as usize);
+        }
+    }
+}
+
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::path::PathBuf;

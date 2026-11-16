@@ -83,13 +83,8 @@ impl Site {
         column: u32,
         name: &'static str,
     ) -> Site {
-        let id = site_id(Level::Info, module, file, line, column, name, 0) ^ 0x5a5a_0000;
         Site {
-            id: if id >= CONTROL_BASE {
-                id ^ 0x8000_0000
-            } else {
-                id
-            },
+            id: span_id(module, file, line, column, name),
             kind: SiteKind::Span,
             _reserved: 0,
             level: Level::Info,
@@ -127,6 +122,18 @@ pub const fn site_id(
         h ^= 0x8000_0000;
     }
     h
+}
+
+/// ID of a span site: [`site_id`] of the same fields at `Info` level with no
+/// arguments, salted so that a span never shares the ID of a log site with
+/// the same text, and kept out of the control-frame range.
+pub const fn span_id(module: &str, file: &str, line: u32, column: u32, name: &str) -> u32 {
+    let id = site_id(Level::Info, module, file, line, column, name, 0) ^ 0x5a5a_0000;
+    if id >= CONTROL_BASE {
+        id ^ 0x8000_0000
+    } else {
+        id
+    }
 }
 
 /// Link-time collection of every [`Site`] the macros emit; read it with [`sites`].

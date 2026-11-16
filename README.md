@@ -64,7 +64,7 @@ Without a drain, log calls fill the rings and nothing leaves the process. Two sh
 ```rust
 // Text on stdout while the program runs, like env_logger (cargo add rtlog-decode; RTLOG=debug).
 let _log = rtlog_decode::stdout::init();
-// Unix: keep the last records if the process panics or crashes.
+// Unix and Windows: keep the last records if the process panics or crashes.
 rtlog::crash::install("crashes/")?;
 ```
 
@@ -99,7 +99,7 @@ cargo run --release -p rtlog-examples --example perfetto_quickstart
 
 ![Threads write into their own rings; the drain sends frames to the host, which decodes them](docs/images/architecture.svg)
 
-Each call site gets an ID at build time; its format string goes into a contract. The program can write the contract itself (`rtlog::contract::write`, any OS), or the host reads it from an ELF binary (`rtlog contract --elf`, Linux and firmware). [Architecture →](docs/architecture.md)
+Each call site gets an ID at build time; its format string goes into a contract. The program can write the contract itself (`rtlog::contract::write`, any OS), or the host reads it from the binary (`rtlog contract --elf`: ELF on Linux and firmware, Mach-O on macOS, PE on Windows). [Architecture →](docs/architecture.md)
 
 ## Guides
 
@@ -108,7 +108,7 @@ Each call site gets an ID at build time; its format string goes into a contract.
 | [Perfetto tracing](docs/use-cases/perfetto.md) | Follow an application thread by thread, down to the microsecond |
 | [When the process crashes](docs/crash.md) | Panics, segfaults, division by zero, abort: what is kept and what to do |
 | [Embedded Rust](docs/embedded.md) | `no_std` setup, linker snippet, getting the contract from firmware |
-| [C and C++](docs/c-cpp.md) | Header-only producer, build, capture, decode |
+| [C and C++](docs/c-cpp.md) | Header-only producer for Linux, macOS, Windows and bare metal: build, capture, decode |
 | [Zephyr](docs/zephyr.md) | Module, Kconfig, transports |
 | [Configuration and CLI](docs/reference.md) | Levels, environment variables, features, every `rtlog` command and option, the JSON output |
 | [Performance and size](docs/performance.md) | Cycles per call, flash and RAM, measuring on your board |
@@ -132,7 +132,7 @@ Each call site gets an ID at build time; its format string goes into a contract.
 
 ## Status
 
-v0.2 preview. Every CI run tests it on Linux, macOS, Windows, and on arm64, ARMv7, RISC-V and x86 under QEMU. Each run also includes a 2-minute soak test, Miri, and Thread and Address sanitizers. Not yet there: `derive(Log)`, the `log` / `tracing` / `defmt` bridges, per-module levels, and stripping format strings from shipped binaries. [Roadmap →](docs/roadmap.md)
+v0.2 preview. Every CI run tests Rust, C and C++ on Linux, macOS and Windows, Rust on arm64, ARMv7, RISC-V and x86 under QEMU, and the Zephyr module on an emulated Cortex-M3. Each run also includes a 2-minute soak test, Miri, and Thread and Address sanitizers. Not yet there: `derive(Log)`, the `log` / `tracing` / `defmt` bridges, per-module levels, and stripping format strings from shipped binaries. [Roadmap →](docs/roadmap.md)
 
 ## Licence
 

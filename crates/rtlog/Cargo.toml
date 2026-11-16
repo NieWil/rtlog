@@ -17,8 +17,9 @@ std = []
 [dependencies]
 linkme = "0.3"
 
-# Crash handler (signals, open/write) on Unix with `std`; never on bare metal.
-[target.'cfg(unix)'.dependencies]
+# Crash handler (signals or exceptions, open/write) on Unix and Windows with
+# `std`; never on bare metal.
+[target.'cfg(any(unix, windows))'.dependencies]
 libc = { version = "0.2", default-features = false }
 
 [dev-dependencies]

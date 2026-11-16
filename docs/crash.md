@@ -2,7 +2,7 @@
 
 A log call writes into the calling thread's ring and returns; a drain sends the frames out later. So when a process dies, the most recent records may still be in the rings. rtlog's crash handler writes them to a file before the process goes, so you see what happened right before the failure.
 
-Available on Unix (Linux, macOS, the BSDs) with the `std` feature, and in C on POSIX. Windows and bare-metal targets have no crash dump yet ([roadmap](roadmap.md)).
+Available on Unix (Linux, macOS, the BSDs) and Windows with the `std` feature, and in C on POSIX and Windows. Bare-metal targets have no crash dump yet ([roadmap](roadmap.md)). [What differs on Windows](#windows) is at the end.
 
 ## What to do
 
@@ -64,3 +64,23 @@ The handler runs while the process is in an unknown state, so it does only what 
 - for fatal signals it first turns logging off, so the dump is a consistent snapshot. If the drain was consuming at that moment, a frame can appear both in the main stream and in the dump, never in neither. Then the default action runs (core dump, exit status naming the signal). After a panic the previous panic hook runs and the program continues if it can.
 
 Tests crash real child processes in each of these ways, including with a drain blocked in a transport write, and check that every record logged before the crash is in the dump: [`crates/rtlog-decode/tests/crash.rs`](../crates/rtlog-decode/tests/crash.rs) for Rust, and [`c/examples/crash.c`](../c/examples/crash.c) through [`scripts/c_e2e.sh`](../scripts/c_e2e.sh) for C.
+
+## Windows
+
+Since 0.2.6. `rtlog::crash::install(dir)` and `rtlog_crash_install(dir)` register an unhandled-exception filter (`SetUnhandledExceptionFilter`) and a `SIGABRT` handler in the C runtime; the Rust panic hook is the same as on Unix. A dump looks like this:
+
+```text
+0.000794 [main] WARN  about to fail mode=segv
+0.001983 [main] CRASH EXCEPTION_ACCESS_VIOLATION: invalid memory access (exception 0xc0000005) addr=0x0 pc=0x7ff6a1b2c3d4
+```
+
+| Event | Dumped | Record |
+| --- | --- | --- |
+| Rust panic | yes | `panic: ...` |
+| Access violation, integer division by zero, illegal instruction, any other exception no handler takes | yes | exception code, data address (access violation, in-page error), program counter |
+| `abort()` of the C runtime | yes | `SIGABRT: abort` |
+| `std::process::abort()`, `panic = "abort"` after the hook | no (the panic itself is dumped by the hook) | Rust aborts with a fail-fast, which no handler sees |
+| Stack overflow | no | the filter would run on the exhausted stack |
+| `TerminateProcess`, power loss | no | |
+
+Differences from Unix: the dump runs on the faulting thread's stack (there is no alternate stack to switch to); the process then ends with the exception code as its exit status (`0xC0000005`), not a signal; a filter installed before rtlog's is called after the dump. The directory path may contain any Unicode characters (the file is opened with a wide-character path).
