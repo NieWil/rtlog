@@ -84,7 +84,7 @@ A target's clock counts from an arbitrary start: boot, or a CPU counter. The cap
 | `--start <time>` | The wall-clock time of the first event of the capture: about when the program started logging |
 | `--epoch <time>` | The wall-clock time of the target's time zero, when you know it |
 
-`<time>` is Unix seconds or an RFC 3339 time (`2026-11-17T09:30:00Z`). With neither option the records have no `timeUnixNano`; a backend then shows them at the time it received them, or at 1970.
+If the target's clock already counts from 1970-01-01, use `--epoch 0`. `<time>` is Unix seconds or an RFC 3339 time (`2026-11-17T09:30:00Z`). With neither option the records have no `timeUnixNano`; a backend then shows them at the time it received them, or at 1970.
 
 ## Into a collector
 
