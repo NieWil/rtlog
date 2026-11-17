@@ -4,7 +4,7 @@
 
 ```sh
 rtlog decode --contract app.contract.jsonl app.rtlog --out syslog \
-    --syslog-start 2026-11-17T09:30:00Z --syslog-host gw1 --syslog-app motor
+    --start 2026-11-17T09:30:00Z --host gw1 --app motor
 ```
 
 ```text
@@ -19,8 +19,8 @@ rtlog decode --contract app.contract.jsonl app.rtlog --out syslog \
 | `<PRI>` | facility × 8 + severity. Facility: `--syslog-facility`, default `user` (1). Severity: see the next table |
 | Version | `1` |
 | Timestamp | UTC, microseconds; `-` when no time is given (see [Time of day](#time-of-day)) |
-| Host name | `--syslog-host`; `-` by default |
-| Application | `--syslog-app`; `rtlog` by default |
+| Host name | `--host`; `-` by default |
+| Application | `--app`; `rtlog` by default |
 | Process ID field | the name of the thread or task that logged (`ctx3` if it has none) |
 | Message ID | the site ID in hexadecimal for a log record: the same for every record of one call site. Otherwise `span`, `dropped`, `gap` or `crash` |
 | Structured data | one element, `rtlog@32473`: `level`, `file`, `line`, `module`, `ts_ns` (the time on the target's clock, in nanoseconds), `ctx` (context ID) |
@@ -49,8 +49,8 @@ A target's clock counts from an arbitrary start: boot, or a CPU counter. The cap
 
 | Option | Meaning |
 | --- | --- |
-| `--syslog-start <time>` | The wall-clock time of the first event of the capture: about when the program started logging |
-| `--syslog-epoch <time>` | The wall-clock time of the target's time zero, when you know it (a firmware whose clock starts at reset, and the time of the reset) |
+| `--start <time>` | The wall-clock time of the first event of the capture: about when the program started logging |
+| `--epoch <time>` | The wall-clock time of the target's time zero, when you know it (a firmware whose clock starts at reset, and the time of the reset) |
 
 `<time>` is Unix seconds (`1794907800`, `1794907800.25`) or an RFC 3339 time (`2026-11-17T09:30:00Z`, `2026-11-17T10:30:00+01:00`). With neither option the timestamp field is `-` and a syslog daemon stamps each line with the time it receives it; `ts_ns` in the structured data keeps the exact spacing between records.
 

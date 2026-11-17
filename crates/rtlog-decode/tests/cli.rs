@@ -712,11 +712,11 @@ fn cli_writes_syslog_lines() {
             "--out",
             "syslog",
             "--no-spans",
-            "--syslog-epoch",
+            "--epoch",
             "2026-11-17T09:30:00Z",
-            "--syslog-host",
+            "--host",
             "gw1",
-            "--syslog-app",
+            "--app",
             "motor",
             "--syslog-facility",
             "local0",
@@ -739,17 +739,17 @@ fn cli_writes_syslog_lines() {
     let err = failed(&decode(
         &contract,
         &stream,
-        &["--out", "syslog", "--syslog-epoch", "noon"],
+        &["--out", "syslog", "--epoch", "noon"],
     ));
     assert!(
-        err.contains("--syslog-epoch \"noon\": expected Unix seconds"),
+        err.contains("--epoch \"noon\": expected Unix seconds"),
         "{err}"
     );
-    // The first line of the capture is stamped with --syslog-start.
+    // The first line of the capture is stamped with --start.
     let stdout = succeeded(&decode(
         &contract,
         &stream,
-        &["--out", "syslog", "--syslog-start", "1794907800"],
+        &["--out", "syslog", "--start", "1794907800"],
     ));
     // The capture begins with the span opening; every line is within the
     // same second of that moment.
@@ -762,9 +762,9 @@ fn cli_writes_syslog_lines() {
     let err = failed(&decode(
         &contract,
         &stream,
-        &["--out", "syslog", "--syslog-start", "noon"],
+        &["--out", "syslog", "--start", "noon"],
     ));
-    assert!(err.contains("--syslog-start \"noon\": expected"), "{err}");
+    assert!(err.contains("--start \"noon\": expected"), "{err}");
 
     let err = failed(&decode(
         &contract,
@@ -773,6 +773,79 @@ fn cli_writes_syslog_lines() {
     ));
     assert!(
         err.contains("--syslog-facility \"24\": expected 0 to 23"),
+        "{err}"
+    );
+}
+
+#[test]
+fn cli_writes_otlp_json_lines() {
+    let dir = Scratch::new("otlp");
+    let (contract, stream) = dir.contract_and_stream();
+
+    let stdout = succeeded(&decode(
+        &contract,
+        &stream,
+        &[
+            "--out",
+            "otlp-json",
+            "--start",
+            "1794907800",
+            "--host",
+            "gw1",
+            "--app",
+            "motor",
+        ],
+    ));
+    assert_eq!(stdout.lines().count(), 1, "{stdout}");
+    let data: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let resource = &data["resourceLogs"][0];
+    let names: Vec<&str> = resource["resource"]["attributes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["value"]["stringValue"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["motor", "gw1"]);
+    let records = resource["scopeLogs"][0]["logRecords"].as_array().unwrap();
+    assert_eq!(
+        records.len(),
+        2,
+        "info and warn; the span is not a log record"
+    );
+    assert_eq!(records[0]["body"]["stringValue"], "cli speed=1200 ok=true");
+    assert_eq!(records[0]["severityText"], "INFO");
+    assert_eq!(records[1]["severityNumber"], 13);
+    // Both within the second that began at --start.
+    for r in records {
+        let t: u64 = r["timeUnixNano"].as_str().unwrap().parse().unwrap();
+        assert_eq!(t / 1_000_000_000, 1_794_907_800, "{r}");
+    }
+
+    // The same options name the syslog fields.
+    let stdout = succeeded(&decode(
+        &contract,
+        &stream,
+        &[
+            "--out", "syslog", "--epoch", "0", "--host", "gw1", "--app", "motor",
+        ],
+    ));
+    assert!(
+        stdout
+            .lines()
+            .all(|l| l.contains("Z gw1 motor ") && is_rfc5424(l)),
+        "{stdout}"
+    );
+
+    // Without a time the records carry none.
+    let stdout = succeeded(&decode(&contract, &stream, &["--out", "otlp-json"]));
+    assert!(!stdout.contains("timeUnixNano"), "{stdout}");
+    let err = failed(&decode(
+        &contract,
+        &stream,
+        &["--out", "otlp-json", "--start", "noon"],
+    ));
+    assert!(
+        err.contains("--start \"noon\": expected Unix seconds"),
         "{err}"
     );
 }

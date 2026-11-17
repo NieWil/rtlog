@@ -11,24 +11,27 @@
 use std::io::{IsTerminal, Write};
 use std::process::ExitCode;
 
-use rtlog_decode::{decode_with, syslog, Contract, Options, Output};
+use rtlog_decode::{decode_with, otlp, syslog, Contract, Options, Output};
 
 const USAGE: &str = "usage:
-  rtlog decode --contract <contract.jsonl> [--out text|json|perfetto|syslog]
-               [-o <file>] [--color auto|always|never] [--no-spans] [--force]
-               [--syslog-start <time> | --syslog-epoch <time>] [--syslog-host <name>]
-               [--syslog-app <name>] [--syslog-facility <name|0-23>]
-               [--syslog-sd-id <name>] <stream.rtlog>
+  rtlog decode --contract <contract.jsonl> [-o <file>]
+               [--out text|json|perfetto|syslog|otlp-json]
+               [--color auto|always|never] [--no-spans] [--force]
+               [--start <time> | --epoch <time>] [--host <name>] [--app <name>]
+               [--syslog-facility <name|0-23>] [--syslog-sd-id <name>]
+               <stream.rtlog>
   rtlog check <contract.jsonl>
   rtlog contract --elf <binary> [-o <contract.jsonl>]
   rtlog verify --contract <contract.jsonl> <image>...
 
   --json and --perfetto are short for --out json and --out perfetto.
   Perfetto output opens in https://ui.perfetto.dev (Open trace file).
-  Syslog output is RFC 5424 lines. --syslog-start is the wall-clock time of
-  the capture's first event, --syslog-epoch that of the target's time zero,
-  as Unix seconds or 2026-11-17T09:30:00Z; without either the lines carry no
-  timestamp and the receiver adds its own.
+  Syslog output is RFC 5424 lines; otlp-json is OpenTelemetry log records,
+  one OTLP JSON object per line, for a collector. For both, --start is the
+  wall-clock time of the capture's first event and --epoch that of the
+  target's time zero, as Unix seconds or 2026-11-17T09:30:00Z (without
+  either the records carry no time of day); --host and --app name the
+  machine and the program.
   `contract --elf` reads the binary that was built: ELF (Linux, firmware),
   Mach-O (macOS) or PE (Windows); `--binary` is the same option. A Rust
   program can also write its contract with rtlog::contract::write(path).
@@ -59,6 +62,7 @@ fn run(args: &[String]) -> Result<(), String> {
             let mut color = "auto".to_owned();
             let mut opts = Options::default();
             let mut sys = syslog::Config::default();
+            let mut otel = otlp::Config::default();
             let mut it = args[1..].iter();
             while let Some(a) = it.next() {
                 let mut value =
@@ -73,25 +77,31 @@ fn run(args: &[String]) -> Result<(), String> {
                             "json" => Output::Json,
                             "perfetto" | "chrome" => Output::Perfetto,
                             "syslog" => Output::Syslog,
+                            "otlp-json" => Output::OtlpJson,
                             o => return Err(format!("unknown output {o:?}\n{USAGE}")),
                         }
                     }
                     "-o" | "--output" => out_file = Some(value("-o")?),
                     "--color" => color = value("--color")?,
-                    "--syslog-epoch" => {
-                        let v = value("--syslog-epoch")?;
-                        sys.epoch_ns = Some(syslog::parse_epoch(&v).ok_or(format!(
-                            "--syslog-epoch {v:?}: expected Unix seconds or a time like 2026-11-17T09:30:00Z"
+                    f @ ("--epoch" | "--start") => {
+                        let v = value(f)?;
+                        let t = Some(syslog::parse_epoch(&v).ok_or(format!(
+                            "{f} {v:?}: expected Unix seconds or a time like 2026-11-17T09:30:00Z"
                         ))?);
+                        if f == "--epoch" {
+                            (sys.epoch_ns, otel.epoch_ns) = (t, t);
+                        } else {
+                            (sys.start_ns, otel.start_ns) = (t, t);
+                        }
                     }
-                    "--syslog-start" => {
-                        let v = value("--syslog-start")?;
-                        sys.start_ns = Some(syslog::parse_epoch(&v).ok_or(format!(
-                            "--syslog-start {v:?}: expected Unix seconds or a time like 2026-11-17T09:30:00Z"
-                        ))?);
+                    "--host" => {
+                        sys.hostname = value("--host")?;
+                        otel.host_name = sys.hostname.clone();
                     }
-                    "--syslog-host" => sys.hostname = value("--syslog-host")?,
-                    "--syslog-app" => sys.app_name = value("--syslog-app")?,
+                    "--app" => {
+                        sys.app_name = value("--app")?;
+                        otel.service_name = sys.app_name.clone();
+                    }
                     "--syslog-facility" => {
                         let v = value("--syslog-facility")?;
                         sys.facility = syslog::facility(&v).ok_or(format!(
@@ -120,6 +130,7 @@ fn run(args: &[String]) -> Result<(), String> {
             let bytes = std::fs::read(&path).map_err(|e| format!("{path}: {e}"))?;
             let d = match opts.output {
                 Output::Syslog => syslog::decode(&contract, &bytes, &opts, &sys),
+                Output::OtlpJson => otlp::decode(&contract, &bytes, &opts, &otel),
                 _ => decode_with(&contract, &bytes, &opts),
             }
             .map_err(|e| format!("{path}: {e}"))?;
