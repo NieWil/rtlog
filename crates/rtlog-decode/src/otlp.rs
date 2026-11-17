@@ -284,10 +284,10 @@ mod tests {
     fn base64_pads() {
         for (bytes, want) in [
             (&b""[..], ""),
-            (b"f", "Zg=="),
-            (b"fo", "Zm8="),
-            (b"foo", "Zm9v"),
-            (b"foob", "Zm9vYg=="),
+            (b"a", "YQ=="),
+            (b"ab", "YWI="),
+            (b"abc", "YWJj"),
+            (b"abcd", "YWJjZA=="),
             (b"\xff\xfe\xfd", "//79"),
         ] {
             assert_eq!(base64(bytes), want);
