@@ -200,6 +200,25 @@ jobs:
           name: c-cpp-capture-${{ matrix.cc }}-${{ runner.os }}
           path: target/c-e2e/
 
+  # A program rtlog's authors did not write: Cloudflare's Pingora proxy at a
+  # pinned revision, with its access log through `log` and through rtlog.
+  # A short round: it shows that the port builds, runs and decodes; the
+  # numbers of a shared runner are reported, not gated.
+  reference-pingora:
+    name: reference application (Pingora)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            reference/pingora
+      - run: sudo apt-get install -y -qq cmake >/dev/null
+      - run: reference/pingora/run.sh 3 16 2 1 | tee pingora.md
+      - run: cat pingora.md >> "$GITHUB_STEP_SUMMARY"
+
   # The Zephyr module on an emulated Cortex-M3 (qemu_cortex_m3): build the
   # hello sample, run it in QEMU with the console UART captured, read the
   # contract from zephyr.elf and decode the capture.
