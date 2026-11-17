@@ -115,6 +115,8 @@ Take existing open-source programs that already log, and port their log calls, s
    | 5 k | Nav2 (ROS 2 navigation) | Linux robot, C++ | `RCLCPP_*` | Yes | Control and planning rates |
    | 5 k | `tokio-rs/mini-redis` | Linux service, Rust | `tracing` | No: a teaching project | None stated; small enough to port by hand |
 
+   Pingora is started: [`reference/pingora`](../reference/pingora/README.md) measures its access log through `log` and through rtlog and surveys its 552 call sites.
+
    Start with three where the log is essential and performance is a requirement, one per scale: Pingora on Linux (Rust, every request writes an access log on the latency path), a Zephyr sample with its network or Bluetooth stack at debug level on a microcontroller (runs in the QEMU job), and PX4 for hard real time (its log is the flight recorder). Envoy is the C++ counterpart of Pingora. `mini-redis` stays useful as a first, small port to settle the method before the large ones.
 2. Measure each reference as it is, with its own logger: flash by section, static RAM, cycles per call for its three most frequent call sites, bytes per second on its transport. Commit the method and the numbers (`docs/reference-apps.md`).
 3. Port the Zephyr reference to `rtlog.h`. Report the same four numbers for three builds: original logger, rtlog, rtlog with `CONFIG_RTLOG_STRIP=y`. Keep the port as a patch series in the repository, applied in CI on a pinned upstream revision, so the comparison is reproducible and does not rot silently.
