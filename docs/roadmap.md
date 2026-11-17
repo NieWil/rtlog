@@ -159,23 +159,25 @@ A bridge for the `log` crate does not show the saving: `log` hands the logger an
 
 1. Homebrew tap for the CLI (macOS, Linux). 2. winget or scoop manifest (Windows). 3. vcpkg and Conan recipes for `rtlog.h`. 4. A west manifest snippet and a listing among Zephyr's external modules. 5. PlatformIO and ESP-IDF component registry entries.
 
-Linux packages, after the `.deb` files the release workflow builds today (`rtlog`, `rtlog-dev`). No submission to a distribution for now: steps 6 to 9 are packages rtlog publishes itself, and step 10 waits for 1.0.
-
-6. **Names that follow each distribution's rules.** rtlog installs a command, a C header and a Rust crate, and no shared library, so no package is called `librtlog`: a `lib<name><N>` package holds a shared library with a stable ABI. The header package becomes `librtlog-dev` on Debian and Ubuntu (today `rtlog-dev`, kept as a transitional name) and `rtlog-devel` in RPM; the command stays `rtlog`. A search of the Debian, Ubuntu, Fedora, AUR and OpenEmbedded indexes on 2026-11-17 found no `rtlog` or `librtlog` package. An unrelated C++ logger also called rtlog exists and builds a `librtlog.so`; the names above do not claim that file name.
-7. **RPM packages** (`rtlog`, `rtlog-devel`) built by the release workflow next to the `.deb` files, installed and checked with `rpmlint` in a Fedora container.
-8. **An apt and a dnf repository** on GitHub Pages, signed, so `apt upgrade` and `dnf upgrade` follow releases; or a Launchpad PPA and a Fedora COPR project, which build from source for every release of the distribution.
-9. **An AUR `PKGBUILD`** (`rtlog`, and `rtlog-bin` from the release binaries) **and a Yocto layer** (`meta-rtlog`: a recipe for the header, one for the CLI as a native tool), each built in CI.
-10. **After 1.0: the distributions' own repositories.** Debian: an Intent to Package bug, then a sponsored upload; Ubuntu receives it from Debian. Fedora: a package review request, then EPEL branches for RHEL and CentOS Stream. Arch: adoption from the AUR by a package maintainer. Yocto: the recipes proposed to meta-openembedded. A distribution keeps a version for years, so this waits for the frozen wire format.
-
 **12f. First impression and trust**
 
 1. A Perfetto screenshot of `examples/app_trace.rs` at the top of the README. 2. Repository topics and a social preview image. 3. `SECURITY.md`, a minimum supported Rust version stated and checked in CI. 4. Issues labelled for first contributions, taken from this roadmap. 5. A written stability promise for the wire format and the contract schema ahead of 1.0.
 
+**12g. Linux packages**
+
+They come after the `.deb` files the release workflow builds today (`rtlog`, `rtlog-dev`). No submission to a distribution for now: steps 1 to 4 are packages rtlog publishes itself, and step 5 waits for 1.0.
+
+1. **Names that follow each distribution's rules.** rtlog installs a command, a C header and a Rust crate, and no shared library, so no package is called `librtlog`: a `lib<name><N>` package holds a shared library with a stable ABI. The header package becomes `librtlog-dev` on Debian and Ubuntu (today `rtlog-dev`, kept as a transitional name) and `rtlog-devel` in RPM; the command stays `rtlog`. A search of the Debian, Ubuntu, Fedora, AUR and OpenEmbedded indexes on 2026-11-17 found no `rtlog` or `librtlog` package. An unrelated C++ logger also called rtlog exists and builds a `librtlog.so`; the names above do not claim that file name.
+2. **RPM packages** (`rtlog`, `rtlog-devel`) built by the release workflow next to the `.deb` files, installed and checked with `rpmlint` in a Fedora container.
+3. **An apt and a dnf repository** on GitHub Pages, signed, so `apt upgrade` and `dnf upgrade` follow releases; or a Launchpad PPA and a Fedora COPR project, which build from source for every release of the distribution.
+4. **An AUR `PKGBUILD`** (`rtlog`, and `rtlog-bin` from the release binaries) **and a Yocto layer** (`meta-rtlog`: a recipe for the header, one for the CLI as a native tool), each built in CI.
+5. **After 1.0: the distributions' own repositories.** Debian: an Intent to Package bug, then a sponsored upload; Ubuntu receives it from Debian. Fedora: a package review request, then EPEL branches for RHEL and CentOS Stream. Arch: adoption from the AUR by a package maintainer. Yocto: the recipes proposed to meta-openembedded. A distribution keeps a version for years, so this waits for the frozen wire format.
+
 ## Release plan
 
 1. **v0.3**: `derive(Log)` and the `Display` escape hatch; the `log` bridge; inline-capture support or a `{name}` rewrite; `--follow` on files and stdin (12d.1); the common record and the syslog exporter (section 10, steps 1–3); printf-style placeholders in C and the Zephyr reference application measured and ported (12a.1–3); README screenshot and package-manager installs for the CLI (12e.1–2, 12f.1–2).
-2. **v0.4**: `tracing` bridge; per-module levels; contract store by hash; `DropOldest`; the defmt firmware and the Linux service ported (12a.4–5); host comparison harness (12b.1); `--follow` on serial and RTT (12d.2–3); journald and OTLP exporters (section 10, steps 4–6); distribution package names, RPM packages and the apt and dnf repositories (12e.6–8).
-3. **v0.5**: MCU crash capture; UDP and shared-memory transports; `elf16` IDs; Cortex-M cycle test on hardware; board comparison against defmt and Zephyr logging (12b.2); `cargo rtlog run` (12d.4); vcpkg, Conan and Zephyr module listing (12e.3–4); spans as OpenTelemetry traces (section 10, step 7); AUR and Yocto layer (12e.9).
-4. **v1.0**: wire format frozen, contract schema versioned and the stability promise written (12f.5), bench suite published with a hardware-measured Cortex-M budget and the reference-application table per release (12a.6, 12b.3). After it, submission to Debian, Fedora and EPEL, Arch and meta-openembedded (12e.10).
+2. **v0.4**: `tracing` bridge; per-module levels; contract store by hash; `DropOldest`; the defmt firmware and the Linux service ported (12a.4–5); host comparison harness (12b.1); `--follow` on serial and RTT (12d.2–3); journald and OTLP exporters (section 10, steps 4–6); distribution package names, RPM packages and the apt and dnf repositories (12g.1–3).
+3. **v0.5**: MCU crash capture; UDP and shared-memory transports; `elf16` IDs; Cortex-M cycle test on hardware; board comparison against defmt and Zephyr logging (12b.2); `cargo rtlog run` (12d.4); vcpkg, Conan and Zephyr module listing (12e.3–4); spans as OpenTelemetry traces (section 10, step 7); AUR and Yocto layer (12g.4).
+4. **v1.0**: wire format frozen, contract schema versioned and the stability promise written (12f.5), bench suite published with a hardware-measured Cortex-M budget and the reference-application table per release (12a.6, 12b.3). After it, submission to Debian, Fedora and EPEL, Arch and meta-openembedded (12g.5).
 
 Security (AEAD, key provisioning) comes after 1.0 unless a user needs it first.
