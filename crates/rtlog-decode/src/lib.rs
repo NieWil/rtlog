@@ -343,6 +343,48 @@ impl TextRenderer {
     }
 }
 
+/// Where the target's clock sits in wall-clock time, for the exporters that
+/// write a time of day: target time `target` was wall-clock time `wall`
+/// (nanoseconds since 1970-01-01T00:00:00Z).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct WallClock {
+    wall: u64,
+    target: u64,
+}
+
+impl WallClock {
+    /// From `epoch_ns`, the wall-clock time of the target's time zero, if
+    /// given; else from `start_ns`, the wall-clock time of the first event
+    /// of `items`. A drop report or a gap has no time of its own and is not
+    /// the first event.
+    pub(crate) fn new(
+        items: &[Item<'_>],
+        epoch_ns: Option<u64>,
+        start_ns: Option<u64>,
+    ) -> Option<Self> {
+        if let Some(wall) = epoch_ns {
+            return Some(WallClock { wall, target: 0 });
+        }
+        let first = items
+            .iter()
+            .filter(|i| !matches!(i, Item::Dropped { .. } | Item::Gap { .. }))
+            .map(Item::ts)
+            .min()
+            .unwrap_or(0);
+        start_ns.map(|wall| WallClock {
+            wall,
+            target: first,
+        })
+    }
+
+    /// The wall-clock time of target time `ts_ns`. The target's clock may
+    /// itself read more than the wall-clock start (a clock that counts from
+    /// 1970 and a start time in the past), so only the difference is used.
+    pub(crate) fn at(&self, ts_ns: u64) -> u64 {
+        self.wall.saturating_add(ts_ns.saturating_sub(self.target))
+    }
+}
+
 /// Decode a whole stream; see [`decode_with`].
 pub fn decode(
     contract: &Contract,
