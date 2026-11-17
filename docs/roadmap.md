@@ -68,7 +68,20 @@ What rtlog does not do yet. The [specification](spec.md) describes only what is 
 
 ## 10. Ecosystem bridges
 
-Host-side outputs beyond text, JSON lines and Perfetto: syslog / journald, OpenTelemetry Logs (`--out otlp`, with a live pipe into a collector), CTF for Trace Compass, SEGGER SystemView, `defmt-print` text. Target-side: the `log`, `tracing` and `defmt` backends listed under section 0.
+Target-side: the `log`, `tracing` and `defmt` backends listed under section 0.
+
+Host-side: more exporters. An exporter is an output format of the decoder (`rtlog decode --out <format>`, `rtlog_decode::Output`). It runs on the host after decoding, so it adds no code and no cost to the program that logs. Today: text, JSON lines, Perfetto. Each step below is one pull request:
+
+1. **A common record.** One decoded-record type (timestamp, level, context, site, file, line, message, typed arguments, span) that every exporter reads, in place of per-format code in the decoder. No new output.
+2. **`--out syslog`.** RFC 5424 lines: rtlog levels mapped to severities (`error` 3, `warn` 4, `info` 6, `debug` and `trace` 7), the context name as `PROCID`, site, file and line as structured data. To stdout or a file.
+3. **`--syslog-to udp://host:514`, `tcp://…` or `unix:/dev/log`.** The same lines sent to a syslog daemon. Needs `--follow` (12d.1) to be useful live.
+4. **`--out journald`.** The journal's native socket protocol, with `PRIORITY`, `CODE_FILE`, `CODE_LINE`, `MESSAGE` and one field per typed argument. Linux only.
+5. **`--out otlp-json`.** OpenTelemetry Logs in the OTLP JSON encoding, one `ExportLogsServiceRequest` per line: what the OpenTelemetry Collector's `otlpjsonfile` receiver reads. Severity numbers and text per the OpenTelemetry log data model; typed arguments as attributes; `code.filepath` and `code.lineno`. No new dependency.
+6. **`--out otlp --endpoint http://host:4318`.** OTLP over HTTP to a collector, in batches, live with `--follow`. Behind a Cargo feature of `rtlog-decode`, so the default CLI stays a static binary without an HTTP client.
+7. **Spans as OpenTelemetry traces.** rtlog spans exported as OTLP spans with generated trace and span IDs, and log records carrying the ID of the span they were written in.
+8. Other formats, as users ask: CTF for Trace Compass, SEGGER SystemView, `defmt-print` text.
+
+Not planned: an exporter on the device. A device that must speak syslog or OTLP itself gives up what rtlog is for; a gateway on the same network runs the decoder.
 
 ## 10b. Threats still open
 
@@ -150,11 +163,21 @@ A bridge for the `log` crate does not show the saving: `log` hands the logger an
 
 1. A Perfetto screenshot of `examples/app_trace.rs` at the top of the README. 2. Repository topics and a social preview image. 3. `SECURITY.md`, a minimum supported Rust version stated and checked in CI. 4. Issues labelled for first contributions, taken from this roadmap. 5. A written stability promise for the wire format and the contract schema ahead of 1.0.
 
+**12g. Linux packages**
+
+They come after the `.deb` files the release workflow builds today (`rtlog`, `rtlog-dev`). No submission to a distribution for now: steps 1 to 4 are packages rtlog publishes itself, and step 5 waits for 1.0.
+
+1. **Names that follow each distribution's rules.** rtlog installs a command, a C header and a Rust crate, and no shared library, so no package is called `librtlog`: a `lib<name><N>` package holds a shared library with a stable ABI. The header package becomes `librtlog-dev` on Debian and Ubuntu (today `rtlog-dev`, kept as a transitional name) and `rtlog-devel` in RPM; the command stays `rtlog`. A search of the Debian, Ubuntu, Fedora, AUR and OpenEmbedded indexes on 2026-11-17 found no `rtlog` or `librtlog` package. An unrelated C++ logger also called rtlog exists and builds a `librtlog.so`; the names above do not claim that file name.
+2. **RPM packages** (`rtlog`, `rtlog-devel`) built by the release workflow next to the `.deb` files, installed and checked with `rpmlint` in a Fedora container.
+3. **An apt and a dnf repository** on GitHub Pages, signed, so `apt upgrade` and `dnf upgrade` follow releases; or a Launchpad PPA and a Fedora COPR project, which build from source for every release of the distribution.
+4. **An AUR `PKGBUILD`** (`rtlog`, and `rtlog-bin` from the release binaries) **and a Yocto layer** (`meta-rtlog`: a recipe for the header, one for the CLI as a native tool), each built in CI.
+5. **After 1.0: the distributions' own repositories.** Debian: an Intent to Package bug, then a sponsored upload; Ubuntu receives it from Debian. Fedora: a package review request, then EPEL branches for RHEL and CentOS Stream. Arch: adoption from the AUR by a package maintainer. Yocto: the recipes proposed to meta-openembedded. A distribution keeps a version for years, so this waits for the frozen wire format.
+
 ## Release plan
 
-1. **v0.3**: `derive(Log)` and the `Display` escape hatch; the `log` bridge; inline-capture support or a `{name}` rewrite; `--follow` on files and stdin (12d.1); printf-style placeholders in C and the Zephyr reference application measured and ported (12a.1–3); README screenshot and package-manager installs for the CLI (12e.1–2, 12f.1–2).
-2. **v0.4**: `tracing` bridge; per-module levels; contract store by hash; `DropOldest`; the defmt firmware and the Linux service ported (12a.4–5); host comparison harness (12b.1); `--follow` on serial and RTT (12d.2–3).
-3. **v0.5**: MCU crash capture; UDP and shared-memory transports; `elf16` IDs; Cortex-M cycle test on hardware; board comparison against defmt and Zephyr logging (12b.2); `cargo rtlog run` (12d.4); vcpkg, Conan and Zephyr module listing (12e.3–4).
-4. **v1.0**: wire format frozen, contract schema versioned and the stability promise written (12f.5), bench suite published with a hardware-measured Cortex-M budget and the reference-application table per release (12a.6, 12b.3).
+1. **v0.3**: `derive(Log)` and the `Display` escape hatch; the `log` bridge; inline-capture support or a `{name}` rewrite; `--follow` on files and stdin (12d.1); the common record and the syslog exporter (section 10, steps 1–3); printf-style placeholders in C and the Zephyr reference application measured and ported (12a.1–3); README screenshot and package-manager installs for the CLI (12e.1–2, 12f.1–2).
+2. **v0.4**: `tracing` bridge; per-module levels; contract store by hash; `DropOldest`; the defmt firmware and the Linux service ported (12a.4–5); host comparison harness (12b.1); `--follow` on serial and RTT (12d.2–3); journald and OTLP exporters (section 10, steps 4–6); distribution package names, RPM packages and the apt and dnf repositories (12g.1–3).
+3. **v0.5**: MCU crash capture; UDP and shared-memory transports; `elf16` IDs; Cortex-M cycle test on hardware; board comparison against defmt and Zephyr logging (12b.2); `cargo rtlog run` (12d.4); vcpkg, Conan and Zephyr module listing (12e.3–4); spans as OpenTelemetry traces (section 10, step 7); AUR and Yocto layer (12g.4).
+4. **v1.0**: wire format frozen, contract schema versioned and the stability promise written (12f.5), bench suite published with a hardware-measured Cortex-M budget and the reference-application table per release (12a.6, 12b.3). After it, submission to Debian, Fedora and EPEL, Arch and meta-openembedded (12g.5).
 
 Security (AEAD, key provisioning) comes after 1.0 unless a user needs it first.
