@@ -2,7 +2,7 @@
 
 [Pingora](https://github.com/cloudflare/pingora) is Cloudflare's HTTP proxy framework in Rust (Apache-2.0). It is the first reference application of the [roadmap](../../docs/roadmap.md) (section 12a): a program rtlog's authors did not write, where the log is essential (a proxy is operated from its access log) and where the logger sits on the latency path of every request.
 
-This directory is the first step of the port: Pingora's own code is unchanged, and the **access log**, the one record a proxy writes per request, goes through the `log` crate or through rtlog. It answers one question: what does the logger add to a request?
+This directory is the first step of the port: Pingora's own code is unchanged, and the **access log**, the one record a proxy writes per request, goes through the `log` crate, through `tracing`, or through rtlog. It answers one question: what does the logger add to a request, in instructions, time and memory?
 
 Pinned to Pingora 0.9.0, revision `3f87e92c` (in `Cargo.toml`). The crate is outside the host workspace, like `size/mcu`.
 
@@ -13,52 +13,78 @@ reference/pingora/run.sh            # 10 s per run, 32 connections, 4 proxy thre
 reference/pingora/run.sh 3 16 2 1   # a short check
 ```
 
-One binary holds an upstream HTTP server, the Pingora proxy in front of it and a load generator (keep-alive connections that send one request after the other and time each). The first build takes about two minutes. The script runs the three variants in turn, then checks that the text log and the decoded rtlog capture both hold the access records.
+One binary holds an upstream HTTP server, the Pingora proxy in front of it and a load generator (keep-alive connections that send one request after the other and time each). The first build takes about three minutes. The script runs the variants in turn, each round starting with another one, counts the instructions of the access-log call with callgrind if valgrind is installed, then checks that the text log and the decoded rtlog capture both hold the access records.
 
 | Variant | Access log |
 | --- | --- |
 | `none` | no access log: the proxy alone |
 | `log` | `log::info!` with `env_logger` writing text to a file, one `write` per record, as with its default stderr target |
+| `log-buf` | the same through a 64 KiB `BufWriter`: a `write` only when the buffer is full |
+| `tracing` | `tracing::info!` with `tracing-subscriber`'s text format and `tracing-appender`'s non-blocking writer: formatted on the worker thread, written by a background thread |
 | `rtlog` | `rtlog::info!` into the worker thread's ring; a drain thread writes the binary frames to a file every millisecond |
 
-Both loggers get the same six fields: method, path, status, body bytes, peer port, duration.
+All loggers get the same six fields: method, path, status, body bytes, peer port, duration. The three text loggers run with their default line format, which starts with a formatted timestamp.
 
 ## Result
 
-Intel Xeon at 2.30 GHz, 4 virtual CPUs of a shared cloud VM, Linux 6.18, rustc 1.97.0, release build with thin LTO. 8 s per run, 32 connections, 4 proxy threads, 3 rounds; upstream, proxy and load generator share the 4 CPUs.
+Intel Xeon at 2.30 GHz, 4 virtual CPUs of a shared cloud VM, Linux 6.18, rustc 1.97.0, release build with thin LTO, valgrind 3.22. 8 s per run, 32 connections, 4 proxy threads, 3 rounds; upstream, proxy and load generator share the 4 CPUs.
 
-| Access log | Requests/s | p50 µs | p99 µs | p99.9 µs | Log call, mean ns | Log bytes/request | Dropped |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| none | 46241 | 672 | 1323 | 2321 | 0 | 0.0 | 0 |
-| log | 42902 | 725 | 1404 | 2545 | 9681 | 139.7 | 0 |
-| rtlog | 51498 | 593 | 1245 | 2282 | 252 | 54.9 | 0 |
-| none | 47097 | 660 | 1294 | 1919 | 0 | 0.0 | 0 |
-| log | 41923 | 736 | 1485 | 2666 | 9688 | 139.7 | 0 |
-| rtlog | 47193 | 652 | 1333 | 2678 | 286 | 54.9 | 0 |
-| none | 45026 | 689 | 1348 | 2436 | 0 | 0.0 | 0 |
-| log | 41375 | 745 | 1519 | 3163 | 10038 | 139.7 | 0 |
-| rtlog | 47885 | 645 | 1286 | 2521 | 274 | 54.9 | 0 |
+### Instructions per access-log call
+
+Counted with callgrind inside the one function that makes the log call, on the worker thread. This is the number to rely on: it is the same on every run and does not depend on the machine's load.
+
+| Access log | Instructions per call | Against rtlog |
+| --- | ---: | ---: |
+| log | 9987 | 38× |
+| log-buf | 10071 | 38× |
+| tracing | 9670 | 37× |
+| rtlog | 264 | 1× |
+
+Buffering the file (`log-buf`) or moving the write to another thread (`tracing`) changes almost nothing here: about 10 000 instructions go into formatting the line on the worker thread, timestamp included, and that part stays. rtlog copies two short strings and four integers into the thread's ring; the 264 instructions include creating that ring on a thread's first call, spread over the run.
+
+### Throughput, latency, memory
+
+| Access log | Requests/s | p50 µs | p99 µs | p99.9 µs | Log call, mean ns | Log bytes/request | Peak RSS MiB | Dropped |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| none | 35524 | 874 | 1692 | 2836 | 0 | 0.0 | 13.5 | 0 |
+| log | 34005 | 910 | 1744 | 3453 | 10482 | 139.7 | 13.4 | 0 |
+| log-buf | 33504 | 926 | 1811 | 3616 | 11593 | 139.7 | 13.2 | 0 |
+| tracing | 29899 | 1030 | 2161 | 4087 | 12844 | 145.7 | 18.0 | 0 |
+| rtlog | 37846 | 822 | 1556 | 3022 | 383 | 54.9 | 13.9 | 0 |
+| log | 33224 | 925 | 1900 | 5653 | 11583 | 139.7 | 13.2 | 0 |
+| log-buf | 33799 | 919 | 1808 | 3725 | 10862 | 139.7 | 13.5 | 0 |
+| tracing | 32436 | 956 | 1900 | 3029 | 11761 | 145.7 | 18.0 | 0 |
+| rtlog | 36703 | 843 | 1676 | 3632 | 399 | 54.9 | 14.8 | 0 |
+| none | 37120 | 842 | 1542 | 2618 | 0 | 0.0 | 14.4 | 0 |
+| log-buf | 34590 | 899 | 1712 | 3302 | 11320 | 139.7 | 13.6 | 0 |
+| tracing | 32407 | 958 | 1879 | 3299 | 10378 | 145.7 | 17.4 | 0 |
+| rtlog | 38812 | 795 | 1620 | 2942 | 398 | 54.9 | 15.1 | 0 |
+| none | 35939 | 861 | 1775 | 3307 | 0 | 0.0 | 13.8 | 0 |
+| log | 34158 | 911 | 1748 | 3193 | 11023 | 139.7 | 13.2 | 0 |
+
+Means of the three rounds:
+
+| Access log | Requests/s | Against none | Log call, mean ns | Peak RSS MiB |
+| --- | ---: | ---: | ---: | ---: |
+| none | 36194 | | | 13.9 |
+| log | 33796 | −6.6 % | 11029 | 13.3 |
+| log-buf | 33964 | −6.2 % | 11258 | 13.4 |
+| tracing | 31581 | −12.7 % | 11661 | 17.8 |
+| rtlog | 37787 | +4.4 % | 393 | 14.6 |
 
 What the numbers say, and what they do not:
 
-- **The log call itself:** about 9.7 µs through `log` and `env_logger`, about 270 ns through rtlog, measured inside the proxy around the call (the `Instant` pair adds about 20 ns to both). The `log` figure is formatting plus one `write` system call per record, with four worker threads taking turns on the file. rtlog copies two short strings and four integers into the thread's ring.
-- **Throughput:** with the `log` access log the proxy serves 7 to 11 % fewer requests than with none, in every round. With rtlog the difference from no logging is inside the noise of this machine: rtlog is above `none` in all three rounds, which a logger cannot cause. Read it as "not measurable here", not as a gain. See the next section.
-- **Log volume:** 54.9 bytes per request against 139.7, 2.5 times less, before any compression. Both logs decode to the same fields.
-- **Not shown:** a buffered or asynchronous `log` backend would cost less per call than `env_logger`'s direct writes; that comparison belongs to the logger comparison of roadmap section 12b. The numbers come from a shared VM and vary by several percent between rounds; the three rounds are listed rather than averaged for that reason.
+- **The log call itself:** about 11 µs through the text loggers and about 0.4 µs through rtlog, measured inside the proxy around the call while all four CPUs are busy (the `Instant` pair adds about 20 ns to each). The ratio agrees with the instruction counts.
+- **Throughput:** the text loggers cost 6 to 13 % of the requests. rtlog shows no cost; see the next section for why it shows a gain it cannot have.
+- **Memory:** the process peaks at 13 to 15 MiB with no log, `log` or rtlog; the differences between those are within what one run varies. rtlog's rings are 64 KiB per logging thread, here four workers. `tracing` with its non-blocking writer peaks about 4 MiB higher, for its queue of formatted lines.
+- **Log volume:** 54.9 bytes per request against 139.7 (145.7 with `tracing`), 2.5 times less, before any compression. All decode to the same fields.
+- **Not shown:** a text logger configured without a timestamp, or with a cheaper format, would execute fewer instructions than the defaults measured here. The absolute requests per second are those of a shared VM where the load generator competes with the proxy; they were about 25 % higher on another day with the same binary.
 
 ## Why rtlog is not faster than no log
 
-A log call adds work, so the proxy cannot serve more requests with it than without. The table above shows more only because two runs of the same variant differ by more than rtlog's cost. A second experiment, six rounds of 6 s with the variants in every possible order, on the same machine:
+A log call adds work, so the proxy cannot serve more requests with it than without. The tables show more only because two runs of the same variant differ by more than rtlog's cost: the three `none` runs above span 35524 to 37120 requests per second, 4 %. In an earlier experiment with six rounds in every order, runs with no access log alone spread over 8 % (41525 to 45017), and rtlog was above `none` in four rounds and below it in two.
 
-| Access log | Requests/s, lowest to highest of 6 runs | Mean | Against none |
-| --- | ---: | ---: | ---: |
-| none | 41525 to 45017 | 43666 | |
-| log | 38636 to 44056 | 40859 | −6.4 % |
-| rtlog | 42482 to 48510 | 44840 | +2.7 % |
-
-Runs with no access log alone spread over 8 % (41525 to 45017). rtlog was above `none` in four rounds and below it in two. Its cost in this workload can be estimated from the call time instead: 270 ns per request on one of four worker threads that each spend about 85 µs per request, about 0.3 %, far below what this setup can resolve.
-
-Where the spread comes from: the upstream, the proxy and 32 load-generating threads share 4 virtual CPUs of a shared VM, so the scheduler, not the proxy, decides much of each run. Resolving a 0.3 % difference needs the load generator on other cores or another machine, pinned proxy threads, and many more rounds; that is part of the comparison harness of roadmap 12b.
+rtlog's cost in this workload follows from the instruction count instead: 264 instructions per request, against the several hundred thousand a proxied request executes, is well under 1 %, far below what this setup can resolve. Where the spread comes from: the upstream, the proxy and 32 load-generating threads share 4 virtual CPUs of a shared VM, so the scheduler, not the proxy, decides much of each run. Resolving a difference that small needs the load generator on other cores or another machine, pinned proxy threads and many more rounds; that is part of the comparison harness of roadmap 12b.
 
 ## What a full port needs
 

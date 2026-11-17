@@ -10,13 +10,19 @@
 //!   the other and time each one.
 //!
 //! ```text
-//! rtlog-reference-pingora <none|log|rtlog> <out-dir> [seconds] [connections] [proxy-threads]
+//! rtlog-reference-pingora <none|log|log-buf|tracing|rtlog> <out-dir> [seconds] [connections] [proxy-threads]
 //! ```
 //!
 //! It prints one markdown table row: requests per second, latency
 //! percentiles in microseconds, the mean time of the access-log call itself
 //! in nanoseconds (read with `Instant`, which adds about 20 ns to each
-//! variant alike), log bytes per request and records rtlog dropped.
+//! variant alike), log bytes per request, the process's peak resident memory
+//! and records rtlog dropped.
+//!
+//! The access-log call is one function, `pingora_access_log`, so that
+//! Valgrind's callgrind can count the instructions it executes on the worker
+//! thread (`--toggle-collect=pingora_access_log`); the process then prints
+//! the number of calls on its last line (`run.sh`).
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -47,6 +53,13 @@ enum Logger {
     /// `log::info!` with `env_logger` writing text to a file, one `write` per
     /// record, as with the usual stderr target.
     Log,
+    /// The same through a 64 KiB `BufWriter`: formatting and a lock per
+    /// record, a `write` only when the buffer is full.
+    LogBuffered,
+    /// `tracing::info!` with `tracing-subscriber`'s text format and
+    /// `tracing-appender`'s non-blocking writer: the record is formatted on
+    /// the worker thread and written by a background thread.
+    Tracing,
     /// `rtlog::info!` into the worker thread's ring; a drain thread writes
     /// the binary frames to a file.
     Rtlog,
@@ -102,23 +115,42 @@ impl ProxyHttp for Proxy {
             .map_or(0, |a| a.port());
         let dur_us = ctx.elapsed().as_micros() as u64;
         let call = Instant::now();
-        match self.logger {
-            Logger::Log => log::info!(
-                "access method={method} path={path} status={status} bytes={bytes} peer_port={peer_port} dur_us={dur_us}"
-            ),
-            Logger::Rtlog => rtlog::info!(
-                "access method={} path={} status={} bytes={} peer_port={} dur_us={}",
-                method,
-                path,
-                status,
-                bytes,
-                peer_port,
-                dur_us
-            ),
-            Logger::None => {}
-        }
+        access_log(self.logger, method, path, status, bytes, peer_port, dur_us);
         LOG_NANOS.fetch_add(call.elapsed().as_nanos() as u64, Ordering::Relaxed);
         LOG_CALLS.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// The access-log call under test: everything the logger does on the worker
+/// thread for one request, and nothing else.
+#[export_name = "pingora_access_log"]
+#[inline(never)]
+fn access_log(
+    logger: Logger,
+    method: &str,
+    path: &str,
+    status: u16,
+    bytes: u64,
+    peer_port: u16,
+    dur_us: u64,
+) {
+    match logger {
+        Logger::Log | Logger::LogBuffered => log::info!(
+            "access method={method} path={path} status={status} bytes={bytes} peer_port={peer_port} dur_us={dur_us}"
+        ),
+        Logger::Tracing => tracing::info!(
+            "access method={method} path={path} status={status} bytes={bytes} peer_port={peer_port} dur_us={dur_us}"
+        ),
+        Logger::Rtlog => rtlog::info!(
+            "access method={} path={} status={} bytes={} peer_port={} dur_us={}",
+            method,
+            path,
+            status,
+            bytes,
+            peer_port,
+            dur_us
+        ),
+        Logger::None => {}
     }
 }
 
@@ -206,12 +238,27 @@ fn file_len(path: &Path) -> u64 {
     std::fs::metadata(path).map_or(0, |m| m.len())
 }
 
+/// Peak resident set size of this process in KiB (`VmHWM`), 0 where the
+/// system does not report it.
+fn peak_rss_kib() -> u64 {
+    std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|s| {
+            s.lines()
+                .find_map(|l| l.strip_prefix("VmHWM:"))
+                .and_then(|v| v.trim().trim_end_matches("kB").trim().parse().ok())
+        })
+        .unwrap_or(0)
+}
+
 fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
-    let usage = "usage: rtlog-reference-pingora <none|log|rtlog> <out-dir> [seconds] [connections] [proxy-threads]";
+    let usage = "usage: rtlog-reference-pingora <none|log|log-buf|tracing|rtlog> <out-dir> [seconds] [connections] [proxy-threads]";
     let logger = match args.get(1).map(String::as_str) {
         Some("none") => Logger::None,
         Some("log") => Logger::Log,
+        Some("log-buf") => Logger::LogBuffered,
+        Some("tracing") => Logger::Tracing,
         Some("rtlog") => Logger::Rtlog,
         _ => return Err(usage.into()),
     };
@@ -225,6 +272,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let text_log = out.join("access.log");
     let binary_log = out.join("access.rtlog");
     let mut drain = None;
+    let mut tracing_guard = None;
     match logger {
         Logger::None => {}
         Logger::Log => {
@@ -232,6 +280,24 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             env_logger::Builder::new()
                 .filter_level(log::LevelFilter::Info)
                 .target(env_logger::Target::Pipe(Box::new(file)))
+                .init();
+        }
+        Logger::LogBuffered => {
+            let file =
+                std::io::BufWriter::with_capacity(64 * 1024, std::fs::File::create(&text_log)?);
+            env_logger::Builder::new()
+                .filter_level(log::LevelFilter::Info)
+                .target(env_logger::Target::Pipe(Box::new(file)))
+                .init();
+        }
+        Logger::Tracing => {
+            let file = std::fs::File::create(&text_log)?;
+            let (writer, guard) = tracing_appender::non_blocking(file);
+            tracing_guard = Some(guard);
+            tracing_subscriber::fmt()
+                .with_writer(writer)
+                .with_ansi(false)
+                .with_max_level(tracing::Level::INFO)
                 .init();
         }
         Logger::Rtlog => {
@@ -308,7 +374,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let nanos = LOG_NANOS.load(Ordering::Relaxed) - calls_before.0;
         let calls = (LOG_CALLS.load(Ordering::Relaxed) - calls_before.1).max(1);
         println!(
-            "| {} | {:.0} | {} | {} | {} | {} | {:.1} | {} |",
+            "| {} | {:.0} | {} | {} | {} | {} | {:.1} | {:.1} | {} |",
             args[1],
             latencies.len() as f64 / elapsed,
             pct(0.50),
@@ -316,6 +382,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             pct(0.999),
             nanos / calls,
             log_bytes as f64 / n as f64,
+            peak_rss_kib() as f64 / 1024.0,
             rtlog::stats().drops,
         );
     }
@@ -323,6 +390,10 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         let mut file = drain.stop();
         rtlog::Transport::flush(&mut file);
     }
+    drop(tracing_guard); // writes what the background thread still holds
+    log::logger().flush();
+    // For the instruction count: calls made over the whole run, warm-up included.
+    println!("access_log_calls {}", LOG_CALLS.load(Ordering::Relaxed));
     // The proxy thread never returns; end the process.
     std::process::exit(0);
 }

@@ -215,7 +215,7 @@ jobs:
           workspaces: |
             .
             reference/pingora
-      - run: sudo apt-get install -y -qq cmake >/dev/null
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq cmake valgrind >/dev/null
       - run: reference/pingora/run.sh 3 16 2 1 | tee pingora.md
       - run: cat pingora.md >> "$GITHUB_STEP_SUMMARY"
 

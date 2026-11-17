@@ -60,7 +60,7 @@ The repository secret `BENCHER_API_KEY` holds an API key of that project; the ke
 
 ## In a real application
 
-[`reference/pingora`](../reference/pingora/README.md) puts rtlog under Cloudflare's Pingora proxy, where every request writes an access log record. On a 4-vCPU Xeon at 2.30 GHz (shared VM, 32 connections, 4 proxy threads) the access-log call takes about 9.7 µs through `log` with `env_logger` and about 270 ns through rtlog; the proxy serves 7 to 11 % fewer requests with the `log` access log and no measurable difference with rtlog; the log takes 54.9 bytes per request against 139.7.
+[`reference/pingora`](../reference/pingora/README.md) puts rtlog under Cloudflare's Pingora proxy, where every request writes an access log record. The access-log call executes about 10 000 instructions on the worker thread through `log` with `env_logger` (buffered or not) or through `tracing` with a non-blocking writer, and 264 through rtlog (callgrind, x86-64, rustc 1.97.0): formatting the line is the cost, and it stays on the worker thread whatever writes the file. On a 4-vCPU Xeon at 2.30 GHz (shared VM, 32 connections, 4 proxy threads) the proxy serves 6 to 13 % fewer requests with a text access log and no measurable difference with rtlog; peak memory is the same within 1 MiB for no log, `log` and rtlog, and about 4 MiB higher with `tracing`; the log takes 54.9 bytes per request against 139.7.
 
 ## Measure on your platform
 
