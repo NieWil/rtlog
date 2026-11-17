@@ -56,14 +56,14 @@ rtlog decode --contract <contract.jsonl> [options] <stream.rtlog>
 | Option | Meaning |
 | --- | --- |
 | `--contract <file>` | The contract of the program that wrote the stream (required). |
-| `--out text\|json\|perfetto\|syslog` | Output format. Default `text`. `--json` and `--perfetto` are short forms; `chrome` is accepted for `perfetto`. `syslog`: RFC 5424 lines, see [Send logs to syslog](syslog.md). |
+| `--out text\|json\|perfetto\|syslog\|otlp-json` | Output format. Default `text`. `--json` and `--perfetto` are short forms; `chrome` is accepted for `perfetto`. `syslog`: RFC 5424 lines, see [Send logs to syslog](syslog.md). `otlp-json`: OpenTelemetry log records, see [Send logs to OpenTelemetry](opentelemetry.md). |
 | `-o <file>`, `--output <file>` | Write to a file instead of stdout. |
 | `--color auto\|always\|never` | Colours in text output. `auto`: on a terminal unless `NO_COLOR` is set, never with `-o`. |
 | `--no-spans` | Leave span open/close records out. |
 | `--force` | Decode even if the stream's contract hash does not match the contract. |
-| `--syslog-start <time>` | With `--out syslog`: the wall-clock time of the capture's first event, as Unix seconds or an RFC 3339 time (`2026-11-17T09:30:00Z`). |
-| `--syslog-epoch <time>` | With `--out syslog`: the wall-clock time of the target's time zero. Takes precedence over `--syslog-start`. With neither, the lines carry no timestamp. |
-| `--syslog-host <name>`, `--syslog-app <name>` | With `--out syslog`: the host name and application fields. Defaults `-` and `rtlog`. |
+| `--start <time>` | With `--out syslog` or `otlp-json`: the wall-clock time of the capture's first event, as Unix seconds or an RFC 3339 time (`2026-11-17T09:30:00Z`). |
+| `--epoch <time>` | With `--out syslog` or `otlp-json`: the wall-clock time of the target's time zero. Takes precedence over `--start`. With neither, the records carry no time of day. |
+| `--host <name>`, `--app <name>` | With `--out syslog` or `otlp-json`: the machine and the program the capture came from (syslog host name and application; OpenTelemetry `host.name` and `service.name`). Default: no host, `rtlog`. |
 | `--syslog-facility <name\|0-23>` | With `--out syslog`: the facility (`user`, `daemon`, `local0` to `local7`, …). Default `user`. |
 | `--syslog-sd-id <name>` | With `--out syslog`: the name of the structured-data element. Default `rtlog@32473`. |
 

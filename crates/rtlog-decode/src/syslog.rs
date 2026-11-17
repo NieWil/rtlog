@@ -18,9 +18,9 @@
 //! The target's clock counts from an arbitrary start (boot, or the start of
 //! the process), so a capture alone does not say what time of day a record
 //! was written. Give the wall-clock time of the target's time zero in
-//! [`Config::epoch_ns`] (`--syslog-epoch` on the command line) to get real
+//! [`Config::epoch_ns`] (`--epoch` on the command line) to get real
 //! timestamps, or the time the capture began in [`Config::start_ns`]
-//! (`--syslog-start`); without either the field is `-` and the receiver
+//! (`--start`); without either the field is `-` and the receiver
 //! stamps the line.
 //!
 //! [RFC 5424]: https://www.rfc-editor.org/rfc/rfc5424
@@ -403,7 +403,7 @@ pub fn decode(
         output: crate::Output::Syslog,
         ..*opts
     };
-    crate::decode_inner(contract, bytes, &opts, cfg)
+    crate::decode_inner(contract, bytes, &opts, cfg, &crate::otlp::Config::default())
 }
 
 #[cfg(test)]

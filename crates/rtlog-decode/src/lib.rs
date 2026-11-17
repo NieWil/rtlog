@@ -6,6 +6,7 @@
 //!   event by event. After a damaged frame decoding resumes at the next resync
 //!   frame and the gap is reported.
 //! - [`syslog`]: RFC 5424 lines for a syslog daemon or a log collector.
+//! - [`otlp`]: OpenTelemetry log records (OTLP JSON) for a collector.
 //! - [`stdout::init`]: text on stdout while the program runs, like `env_logger`.
 //! - [`elf::contract_from_binary`]: the contract from an ELF, Mach-O or PE
 //!   binary, firmware included.
@@ -31,6 +32,7 @@
 
 pub mod contract;
 pub mod elf;
+pub mod otlp;
 mod perfetto;
 pub mod render;
 pub mod stdout;
@@ -56,6 +58,8 @@ pub enum Output {
     Perfetto,
     /// RFC 5424 syslog lines, one per record; see [`syslog`].
     Syslog,
+    /// OpenTelemetry log records, OTLP JSON lines; see [`otlp`].
+    OtlpJson,
 }
 
 /// Decoding options.
@@ -415,15 +419,22 @@ pub fn decode_with(
     bytes: &[u8],
     opts: &Options,
 ) -> Result<Decoded, DecodeError> {
-    decode_inner(contract, bytes, opts, &syslog::Config::default())
+    decode_inner(
+        contract,
+        bytes,
+        opts,
+        &syslog::Config::default(),
+        &otlp::Config::default(),
+    )
 }
 
-/// [`decode_with`], with the settings of the syslog output.
+/// [`decode_with`], with the settings of the syslog and OTLP outputs.
 pub(crate) fn decode_inner(
     contract: &Contract,
     bytes: &[u8],
     opts: &Options,
     syslog: &syslog::Config,
+    otlp: &otlp::Config,
 ) -> Result<Decoded, DecodeError> {
     let mut dec = Decoder::new(contract, bytes, opts.force)?;
     let mismatched = dec.mismatched;
@@ -529,6 +540,7 @@ pub(crate) fn decode_inner(
 
     match opts.output {
         Output::Perfetto => result.text = perfetto::export(&items, &names, clock_hz),
+        Output::OtlpJson => result.text = otlp::export(&items, &names, mismatched, otlp),
         Output::Syslog => {
             result.text = syslog::export(&items, &names, mismatched, opts.spans, syslog)
         }
