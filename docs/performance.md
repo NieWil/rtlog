@@ -44,7 +44,7 @@ A log call costs 6–8× less than formatting the same line, and meets the spec'
 
 ## Tracked over time
 
-The [`bench` workflow](../.github/workflows/bench.yml) sends two sets of numbers to [Bencher](https://bencher.dev), project `rtlog-niewil`: one point per push to `main`, and a comparison with `main` on each pull request from this repository.
+The [`bench` workflow](../.github/workflows/bench.yml) sends two sets of numbers to [Bencher](https://bencher.dev), to the project named by the repository variable `BENCHER_PROJECT` (`niewil-s-project`): one point per push to `main`, and a comparison with `main` on each pull request from this repository.
 
 | Numbers | Source | Varies between runs | On a pull request |
 | --- | --- | --- | --- |
@@ -53,7 +53,7 @@ The [`bench` workflow](../.github/workflows/bench.yml) sends two sets of numbers
 
 Timings from a shared runner are an indication only. The cycle counts this page quotes come from `examples/timing.rs` on named machines.
 
-The project starts unclaimed, which needs no account. To own it, sign in on bencher.dev, claim `rtlog-niewil`, create a project API key and store it as the repository secret `BENCHER_API_KEY`; the workflow uses it when it is set. The key must belong to the project the workflow sends to, or Bencher answers "Invalid project key". To use a project with another slug, set the repository variable `BENCHER_PROJECT` to it.
+The repository secret `BENCHER_API_KEY` holds an API key of that project; the key must belong to the project the workflow sends to, or Bencher answers "Invalid project key". Without the variable and the secret (a fork, for example) the workflow sends to an unclaimed project `rtlog-niewil`, which needs no account.
 
 ## In a real application
 
