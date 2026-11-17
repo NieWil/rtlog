@@ -1,6 +1,8 @@
 # rtlog
 
-**Fast, tiny, structured logging and tracing for real-time code, from Cortex-M to Linux.**
+**Fast, tiny, structured logging and tracing for real-time code, from microcontrollers to multi-core servers.**
+
+One wire format and one decoder for Cortex-M and RISC-V firmware (bare metal or Zephyr) and for programs on Linux, macOS and Windows, in Rust, C and C++.
 
 You write `println!`-style log lines. The device writes a few binary bytes into a lock-free ring: no formatting, no allocation, no lock. You read text, JSON or a [Perfetto](https://ui.perfetto.dev) timeline on the host.
 
@@ -21,6 +23,19 @@ You write `println!`-style log lines. The device writes a few binary bytes into 
 - **Never in the way.** Each thread or task owns its ring. A full ring drops and counts; it never blocks an ISR or a control loop.
 - **More than text.** Spans, typed fields and per-thread timelines export straight to Perfetto. [See a real app traced →](docs/use-cases/perfetto.md)
 - **One format everywhere.** Rust (`no_std` and `std`), C, C++ and Zephyr all write the same stream and use the same decoder.
+- **Scales with the machine.** A 1 KiB ring on a microcontroller; one ring per thread on a server, so cores do not contend for a log lock.
+
+## Where it runs
+
+| Target | Languages | What CI does on every pull request |
+| --- | --- | --- |
+| Microcontrollers, bare metal: Cortex-M3, M4F, M7, M33; RV32IMAC | Rust (`no_std`), C, C++ | Builds the library for the four targets; measures flash and RAM on Cortex-M4F |
+| Zephyr RTOS | C, C++ (module with Kconfig) | Builds the sample, runs it on an emulated Cortex-M3 (QEMU) and decodes its UART output |
+| Linux: x86-64, x86, arm64, ARMv7, RISC-V 64 | Rust, C, C++ | Runs the tests natively and under QEMU; C and C++ end to end with GCC and Clang |
+| macOS | Rust, C, C++ | Runs the tests; C and C++ end to end with Apple Clang |
+| Windows | Rust, C, C++ (MinGW-w64, or Clang for the MSVC ABI) | Runs the tests; C and C++ end to end |
+
+Any thread count works on the hosted systems: each thread gets its own ring on its first log call, and one drain thread serves them all. [Platform details →](docs/reference.md#cargo-features-and-platforms)
 
 ## Try it
 

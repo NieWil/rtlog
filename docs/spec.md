@@ -6,7 +6,7 @@ This document describes what rtlog **does**, as released in v0.2.x: the API, how
 
 ## 0. Developer experience and API
 
-A developer writes `rtlog::info!("pid out={} err={}", out, err)` and reads the line on a terminal; everything between is automatic, and the logger has no measurable effect on the system it observes, on an MCU or on Linux.
+A developer writes `rtlog::info!("pid out={} err={}", out, err)` and reads the line on a terminal; everything between is automatic, and the logger has no measurable effect on the system it observes, from a single-core microcontroller to a multi-core server (Linux, macOS, Windows).
 
 **Zero-impact principle** (what "without affecting the system" means)
 
@@ -88,7 +88,7 @@ None covers MCU and desktop builds with one call site, one contract and one view
 
 ## 1. Goals and non-goals
 
-The logger makes every log call bounded, lock-free and allocation-free, and renders human-readable text only on the host. One core crate serves bare-metal MCUs, embedded Linux and desktop.
+The logger makes every log call bounded, lock-free and allocation-free, and renders human-readable text only on the host. One core crate serves bare-metal microcontrollers, RTOS firmware, embedded Linux, and desktop and server programs on Linux, macOS and Windows.
 
 **Goals**
 
