@@ -14,6 +14,7 @@ rtlog is a deferred logger. A log call writes a few binary bytes into a per-thre
 | `examples/` | Runnable examples (not published). `size/mcu`: Cortex-M4F size firmware. |
 | `scripts/` | `spec_check.py` (spec rules), `c_e2e.sh` (C end-to-end), `strip_e2e.sh` (stripped builds end-to-end), `zephyr_qemu.sh` (Zephyr sample on QEMU), `size_report.py`, `results.py` (board results), `build_deb.sh` (Debian packages, with `packaging/debian/`), demo `run.sh`. |
 | `docs/` | Guides, `spec.md` (what is built), `roadmap.md` (what is not), `implementation.md` (deviations). |
+| `reference/` | Reference applications: other projects with their logging through rtlog, outside the workspace (`pingora`). |
 | `results/` | Timing results from users' boards, one file per board and version. |
 
 ## Before you call a change done

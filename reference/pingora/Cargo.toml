@@ -1,0 +1,25 @@
+# Reference application: Cloudflare's Pingora proxy with its per-request
+# access log written through the `log` crate or through rtlog. Not part of
+# the host workspace; see README.md in this directory.
+[package]
+name = "rtlog-reference-pingora"
+version = "0.0.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[workspace]
+
+[dependencies]
+# Pinned: Pingora 0.9.0 at the revision the numbers in README.md were taken on.
+pingora-core = { git = "https://github.com/cloudflare/pingora", rev = "3f87e92c982ee27c714506e16ae362776faea4aa" }
+pingora-proxy = { git = "https://github.com/cloudflare/pingora", rev = "3f87e92c982ee27c714506e16ae362776faea4aa" }
+async-trait = "0.1"
+env_logger = "0.11"
+log = "0.4"
+rtlog = { path = "../../crates/rtlog" }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+debug = false
