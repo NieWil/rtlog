@@ -42,6 +42,19 @@ A log call costs 6–8× less than formatting the same line, and meets the spec'
 - 10 messages cost **3.3 KB** of flash with rtlog against **18.3 KB** with `core::fmt`: 5.6× smaller.
 - With the `strip` feature the descriptors and their strings are not in flash: the 10-call-site firmware takes 3 796 B against 4 536 B unstripped (both built with rustc 1.97.0; the table above is from an earlier compiler), 740 B or 16 % less. [How to strip →](strip.md)
 
+## Tracked over time
+
+The [`bench` workflow](../.github/workflows/bench.yml) sends two sets of numbers to [Bencher](https://bencher.dev), project `rtlog-niewil`: one point per push to `main`, and a comparison with `main` on each pull request from this repository.
+
+| Numbers | Source | Varies between runs | On a pull request |
+| --- | --- | --- | --- |
+| Flash and RAM of the five `size/mcu` variants, fixed runtime code, code per call site (bytes) | `scripts/size_report.py --bmf` | No | Fails when one grows more than 2 % over `main` |
+| Criterion timings of the log call and the decoder (ns) | `cargo bench` on a shared GitHub runner | By several percent | Reported with a t-test against the history; never fails |
+
+Timings from a shared runner are an indication only. The cycle counts this page quotes come from `examples/timing.rs` on named machines.
+
+The project starts unclaimed, which needs no account. To own it, sign in on bencher.dev, claim `rtlog-niewil`, create a project API key and store it as the repository secret `BENCHER_API_KEY`; the workflow uses it when it is set.
+
 ## Measure on your platform
 
 ### Linux, macOS, Windows (native)

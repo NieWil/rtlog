@@ -6,9 +6,13 @@ the 10 call sites with rtlog's `strip` feature, and the same 10 messages with
 core::fmt) and reads section sizes with
 llvm-size (from the llvm-tools-preview rustup component).
 
-usage: scripts/size_report.py [--out report.md]
+usage: scripts/size_report.py [--out report.md] [--bmf sizes.json]
+
+--bmf writes the same numbers as Bencher Metric Format JSON, for
+`bencher run --adapter json` (.github/workflows/bench.yml).
 """
 import argparse
+import json
 import pathlib
 import subprocess
 import sys
@@ -55,6 +59,7 @@ def build(variant):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out")
+    ap.add_argument("--bmf")
     a = ap.parse_args()
     v = {name: build(name) for name in ("baseline", "rtlog1", "rtlog10", "rtlog10strip", "fmt10")}
     base = v["baseline"]
@@ -105,6 +110,18 @@ def main():
     print(report)
     if a.out:
         pathlib.Path(a.out).write_text(report)
+    if a.bmf:
+        # One benchmark per firmware variant, plus the two budgeted figures.
+        bmf = {
+            "size/mcu %s" % key: {
+                "flash-bytes": {"value": v[key]["flash"]},
+                "ram-bytes": {"value": v[key]["ram"]},
+            }
+            for _, key in rows
+        }
+        bmf["rtlog fixed runtime"] = {"code-bytes": {"value": round(fixed)}}
+        bmf["rtlog per call site"] = {"code-bytes": {"value": round(per_site_code)}}
+        pathlib.Path(a.bmf).write_text(json.dumps(bmf, indent=2) + "\n")
 
 
 if __name__ == "__main__":
