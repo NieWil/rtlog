@@ -44,7 +44,7 @@ A log call costs 6–8× less than formatting the same line, and meets the spec'
 
 ## Tracked over time
 
-The [`bench` workflow](../.github/workflows/bench.yml) sends two sets of numbers to [Bencher](https://bencher.dev), to the project named by the repository variable `BENCHER_PROJECT` (`niewil-s-project`): one point per push to `main`, and a comparison with `main` on each pull request from this repository.
+The [`bench` workflow](../.github/workflows/bench.yml) sends two sets of numbers to [Bencher](https://bencher.dev), to the project named by the repository variable `BENCHER_PROJECT` (`niewil-s-project`): one point per push to `main`, and a comparison with `main` on each pull request from this repository. It runs only when a push or pull request changes something that can move a number: `crates/`, `examples/`, `size/`, `reference/pingora/`, the two measuring scripts, `Cargo.toml`, `Cargo.lock`, `.cargo/`, a `rust-toolchain` file or the workflow itself. A change to the docs or to `c/` starts no run. A new Rust release can move the numbers without any of these changing; start the workflow by hand ("Run workflow" on its Actions page) to record it.
 
 | Numbers | Source | Varies between runs | On a pull request |
 | --- | --- | --- | --- |

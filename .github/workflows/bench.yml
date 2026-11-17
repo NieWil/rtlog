@@ -19,11 +19,43 @@ name: bench
 # unclaimed project; once the project is claimed on bencher.dev, add an API
 # key of that same project as the repository secret (docs/performance.md).
 # A key of another project is refused with "Invalid project key".
+#
+# It runs only when something that can move a number changed: the library and
+# decoder sources, the measured programs, the measuring scripts, the build
+# settings (Cargo.toml, Cargo.lock, .cargo, rust-toolchain) or this file. A
+# change to the docs, to c/ or to another workflow starts no run and adds no
+# point. A new Rust release can also move the numbers: start a run by hand
+# (workflow_dispatch) to record it.
 on:
   push:
     branches: [main]
+    paths:
+      - crates/**
+      - examples/**
+      - size/**
+      - reference/pingora/**
+      - scripts/size_report.py
+      - scripts/icount.py
+      - Cargo.toml
+      - Cargo.lock
+      - .cargo/**
+      - rust-toolchain*
+      - .github/workflows/bench.yml
   pull_request:
     types: [opened, reopened, synchronize]
+    # The same list as for push.
+    paths:
+      - crates/**
+      - examples/**
+      - size/**
+      - reference/pingora/**
+      - scripts/size_report.py
+      - scripts/icount.py
+      - Cargo.toml
+      - Cargo.lock
+      - .cargo/**
+      - rust-toolchain*
+      - .github/workflows/bench.yml
   workflow_dispatch:
 
 concurrency:
