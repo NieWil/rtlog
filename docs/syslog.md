@@ -52,7 +52,7 @@ A target's clock counts from an arbitrary start: boot, or a CPU counter. The cap
 | `--start <time>` | The wall-clock time of the first event of the capture: about when the program started logging |
 | `--epoch <time>` | The wall-clock time of the target's time zero, when you know it (a firmware whose clock starts at reset, and the time of the reset) |
 
-`<time>` is Unix seconds (`1794907800`, `1794907800.25`) or an RFC 3339 time (`2026-11-17T09:30:00Z`, `2026-11-17T10:30:00+01:00`). With neither option the timestamp field is `-` and a syslog daemon stamps each line with the time it receives it; `ts_ns` in the structured data keeps the exact spacing between records.
+If the target's clock already counts from 1970-01-01, use `--syslog-epoch 0`. `<time>` is Unix seconds (`1794907800`, `1794907800.25`) or an RFC 3339 time (`2026-11-17T09:30:00Z`, `2026-11-17T10:30:00+01:00`). With neither option the timestamp field is `-` and a syslog daemon stamps each line with the time it receives it; `ts_ns` in the structured data keeps the exact spacing between records.
 
 ## Where the lines go
 
