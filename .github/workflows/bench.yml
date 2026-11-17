@@ -9,6 +9,8 @@ name: bench
 #   run, so a pull request that grows one by more than 2 % fails this workflow;
 # - instructions per log call, counted with Valgrind's callgrind, are the same
 #   on every run of the same binary, and gate a pull request the same way;
+# - the same count for the access-log call of the Pingora reference
+#   application (reference/pingora), through log, tracing and rtlog;
 # - Criterion timings come from a shared runner and vary by several percent,
 #   so they are tracked and reported but never fail the workflow.
 #
@@ -45,7 +47,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        what: [size, instructions, timing]
+        what: [size, instructions, timing, pingora]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -63,6 +65,7 @@ jobs:
           workspaces: |
             .
             size/mcu
+            reference/pingora
       - uses: bencherdev/bencher@main
       - name: Branch and baseline
         id: branch
@@ -107,6 +110,27 @@ jobs:
             --github-actions '${{ secrets.GITHUB_TOKEN }}' \
             "python3 scripts/icount.py --bmf icount.json --out icount.md"
           cat icount.md >> "$GITHUB_STEP_SUMMARY"
+      # A program rtlog's authors did not write: Cloudflare's Pingora proxy at a
+      # pinned revision, its access log through log, tracing and rtlog. The
+      # instruction counts of the access-log call gate; throughput, call-time
+      # percentiles and memory of a 3 s run on this shared runner are recorded.
+      - name: Pingora access log (a growth of an instruction count of more than 2 % fails)
+        if: matrix.what == 'pingora'
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq cmake valgrind >/dev/null
+          # An empty key is not "no key": without the secret, leave the variable out.
+          [ -n "$BENCHER_API_KEY" ] || unset BENCHER_API_KEY
+          # shellcheck disable=SC2086 # the branch arguments are a list of options
+          bencher run ${{ steps.branch.outputs.args }} \
+            --testbed pingora-ubuntu-latest \
+            --threshold-measure instructions --threshold-test percentage --threshold-upper-boundary 0.02 \
+            --thresholds-reset \
+            --error-on-alert \
+            --adapter json \
+            --file pingora.json \
+            --github-actions '${{ secrets.GITHUB_TOKEN }}' \
+            "PINGORA_BMF=$PWD/pingora.json reference/pingora/run.sh 3 16 2 1 > pingora.md"
+          cat pingora.md >> "$GITHUB_STEP_SUMMARY"
       - name: Criterion timings on a shared runner (reported, never failing)
         if: matrix.what == 'timing'
         run: |
