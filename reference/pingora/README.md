@@ -84,7 +84,7 @@ What the numbers say, and what they do not:
 
 A log call adds work, so the proxy cannot serve more requests with it than without. The tables show more only because two runs of the same variant differ by more than rtlog's cost: the three `none` runs above span 35524 to 37120 requests per second, 4 %. In an earlier experiment with six rounds in every order, runs with no access log alone spread over 8 % (41525 to 45017), and rtlog was above `none` in four rounds and below it in two.
 
-rtlog's cost in this workload follows from the instruction count instead: 264 instructions per request, against the several hundred thousand a proxied request executes, is well under 1 %, far below what this setup can resolve. Where the spread comes from: the upstream, the proxy and 32 load-generating threads share 4 virtual CPUs of a shared VM, so the scheduler, not the proxy, decides much of each run. Resolving a difference that small needs the load generator on other cores or another machine, pinned proxy threads and many more rounds; that is part of the comparison harness of roadmap 12b.
+rtlog's cost in this workload can be estimated from the call time instead: about 0.4 µs per request, against about 110 µs of worker-thread time per request (4 threads at 36 000 requests per second), is about 0.4 %, far below what this setup can resolve. Where the spread comes from: the upstream, the proxy and 32 load-generating threads share 4 virtual CPUs of a shared VM, so the scheduler, not the proxy, decides much of each run. Resolving a difference that small needs the load generator on other cores or another machine, pinned proxy threads and many more rounds; that is part of the comparison harness of roadmap 12b.
 
 ## What a full port needs
 
