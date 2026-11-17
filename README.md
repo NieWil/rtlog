@@ -109,6 +109,7 @@ cargo run --release -p rtlog-examples --example perfetto_quickstart
 | [`c/examples`](c/examples) | The same from C and C++ |
 | [`stdout_mode`](examples/stdout_mode.rs) | Read logs as text on stdout, like `env_logger`, with binary log calls |
 | [`timing`](examples/timing.rs) | Cost per call in ns and cycles on your machine |
+| [`icount`](examples/icount.rs) | Instructions per call under callgrind, the number CI gates on |
 | [`stripped`](examples/stripped.rs) | A program that ships without its format strings (`strip` feature) |
 
 ## How it works

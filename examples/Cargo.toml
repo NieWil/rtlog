@@ -40,3 +40,7 @@ path = "stdout_mode.rs"
 [[example]]
 name = "stripped"
 path = "stripped.rs"
+
+[[example]]
+name = "icount"
+path = "icount.rs"

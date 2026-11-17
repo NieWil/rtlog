@@ -49,7 +49,10 @@ The [`bench` workflow](../.github/workflows/bench.yml) sends two sets of numbers
 | Numbers | Source | Varies between runs | On a pull request |
 | --- | --- | --- | --- |
 | Flash and RAM of the five `size/mcu` variants, fixed runtime code, code per call site (bytes) | `scripts/size_report.py --bmf` | No | Fails when one grows more than 2 % over `main` |
+| Instructions per log call for six workloads | `scripts/icount.py --bmf` (callgrind on `examples/icount.rs`) | No | Fails when one grows more than 2 % over `main` |
 | Criterion timings of the log call and the decoder (ns) | `cargo bench` on a shared GitHub runner | By several percent | Reported with a t-test against the history; never fails |
+
+The instruction counts are what makes a speed regression visible on a shared runner: callgrind counts the instructions executed inside each workload function, which does not depend on the machine's load. On x86-64 with rustc 1.97.0 a two-argument call executes 73.5 instructions through an explicit producer and 77.5 into the thread-local ring; a call below the runtime level executes 6. They are instructions, not cycles: they show that the code path grew, not how long it takes. A new compiler release can move them, and then the history on `main` moves with it.
 
 Timings from a shared runner are an indication only. The cycle counts this page quotes come from `examples/timing.rs` on named machines.
 

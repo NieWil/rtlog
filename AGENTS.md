@@ -12,7 +12,7 @@ rtlog is a deferred logger. A log call writes a few binary bytes into a per-thre
 | `crates/rtlog-decode` | Host decoder library and the `rtlog` CLI (`src/bin/rtlog.rs`). |
 | `c/include/rtlog.h` | Single-header C/C++ implementation, same wire format. `c/zephyr`: Zephyr module. |
 | `examples/` | Runnable examples (not published). `size/mcu`: Cortex-M4F size firmware. |
-| `scripts/` | `spec_check.py` (spec rules), `c_e2e.sh` (C end-to-end), `strip_e2e.sh` (stripped builds end-to-end), `zephyr_qemu.sh` (Zephyr sample on QEMU), `size_report.py`, `results.py` (board results), `build_deb.sh` (Debian packages, with `packaging/debian/`), demo `run.sh`. |
+| `scripts/` | `spec_check.py` (spec rules), `c_e2e.sh` (C end-to-end), `strip_e2e.sh` (stripped builds end-to-end), `zephyr_qemu.sh` (Zephyr sample on QEMU), `size_report.py`, `icount.py` (instructions per log call, with valgrind), `results.py` (board results), `build_deb.sh` (Debian packages, with `packaging/debian/`), demo `run.sh`. |
 | `docs/` | Guides, `spec.md` (what is built), `roadmap.md` (what is not), `implementation.md` (deviations). |
 | `reference/` | Reference applications: other projects with their logging through rtlog, outside the workspace (`pingora`). |
 | `results/` | Timing results from users' boards, one file per board and version. |
@@ -28,6 +28,7 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps   # every public item
 cargo test --workspace
 cargo build -p rtlog --no-default-features --target thumbv7em-none-eabihf --release   # no_std
 python3 scripts/spec_check.py                                  # real-time, wire, usability rules
+python3 scripts/icount.py                                      # if the log path changed; needs valgrind
 scripts/c_e2e.sh gcc g++                                       # if c/ or the wire format changed
 scripts/strip_e2e.sh                                           # if the descriptors, the macros or rtlog.h changed
 scripts/zephyr_qemu.sh                                         # if c/ changed; needs west, Zephyr and its SDK
