@@ -10,10 +10,11 @@ name: bench
 # - Criterion timings come from a shared runner and vary by several percent,
 #   so they are tracked and reported but never fail the workflow.
 #
-# The Bencher project is `rtlog-niewil`. Without the BENCHER_API_KEY secret the
-# runs go to it as an unclaimed project; once the project is claimed on
-# bencher.dev, add a project API key as that repository secret
-# (docs/performance.md).
+# The Bencher project is `rtlog-niewil`, or the slug in the repository variable
+# BENCHER_PROJECT. Without the BENCHER_API_KEY secret the runs go to it as an
+# unclaimed project; once the project is claimed on bencher.dev, add an API
+# key of that same project as the repository secret (docs/performance.md).
+# A key of another project is refused with "Invalid project key".
 on:
   push:
     branches: [main]
@@ -30,7 +31,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  BENCHER_PROJECT: rtlog-niewil
+  BENCHER_PROJECT: ${{ vars.BENCHER_PROJECT || 'rtlog-niewil' }}
   BENCHER_API_KEY: ${{ secrets.BENCHER_API_KEY }}
 
 jobs:
