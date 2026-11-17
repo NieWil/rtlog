@@ -56,11 +56,16 @@ rtlog decode --contract <contract.jsonl> [options] <stream.rtlog>
 | Option | Meaning |
 | --- | --- |
 | `--contract <file>` | The contract of the program that wrote the stream (required). |
-| `--out text\|json\|perfetto` | Output format. Default `text`. `--json` and `--perfetto` are short forms; `chrome` is accepted for `perfetto`. |
+| `--out text\|json\|perfetto\|syslog` | Output format. Default `text`. `--json` and `--perfetto` are short forms; `chrome` is accepted for `perfetto`. `syslog`: RFC 5424 lines, see [Send logs to syslog](syslog.md). |
 | `-o <file>`, `--output <file>` | Write to a file instead of stdout. |
 | `--color auto\|always\|never` | Colours in text output. `auto`: on a terminal unless `NO_COLOR` is set, never with `-o`. |
 | `--no-spans` | Leave span open/close records out. |
 | `--force` | Decode even if the stream's contract hash does not match the contract. |
+| `--syslog-start <time>` | With `--out syslog`: the wall-clock time of the capture's first event, as Unix seconds or an RFC 3339 time (`2026-11-17T09:30:00Z`). |
+| `--syslog-epoch <time>` | With `--out syslog`: the wall-clock time of the target's time zero. Takes precedence over `--syslog-start`. With neither, the lines carry no timestamp. |
+| `--syslog-host <name>`, `--syslog-app <name>` | With `--out syslog`: the host name and application fields. Defaults `-` and `rtlog`. |
+| `--syslog-facility <name\|0-23>` | With `--out syslog`: the facility (`user`, `daemon`, `local0` to `local7`, …). Default `user`. |
+| `--syslog-sd-id <name>` | With `--out syslog`: the name of the structured-data element. Default `rtlog@32473`. |
 
 A summary goes to stderr: records, spans, contexts, drops and stream gaps. After a corrupted byte the decoder skips to the next resync frame (written every 64 KiB) and reports a gap instead of stopping. The exit status is non-zero when decoding stopped early.
 

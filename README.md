@@ -4,7 +4,7 @@
 
 One wire format and one decoder for Cortex-M and RISC-V firmware (bare metal or Zephyr) and for programs on Linux, macOS and Windows, in Rust, C and C++.
 
-You write `println!`-style log lines. The device writes a few binary bytes into a lock-free ring: no formatting, no allocation, no lock. You read text, JSON or a [Perfetto](https://ui.perfetto.dev) timeline on the host.
+You write `println!`-style log lines. The device writes a few binary bytes into a lock-free ring: no formatting, no allocation, no lock. You read text, JSON, syslog lines or a [Perfetto](https://ui.perfetto.dev) timeline on the host.
 
 [![ci](https://github.com/NieWil/rtlog/actions/workflows/ci.yml/badge.svg)](https://github.com/NieWil/rtlog/actions/workflows/ci.yml)
 [![coverage](https://codecov.io/gh/NieWil/rtlog/graph/badge.svg)](https://codecov.io/gh/NieWil/rtlog)
@@ -132,7 +132,8 @@ Every output format is an exporter in the decoder, so adding one costs the progr
 | Exporter | State |
 | --- | --- |
 | Text, JSON lines, Perfetto timeline | Built (`rtlog decode --out text\|json\|perfetto`) |
-| syslog (RFC 5424), journald | Planned ([roadmap, section 10](docs/roadmap.md#10-ecosystem-bridges)) |
+| syslog (RFC 5424 lines) | Built (`rtlog decode --out syslog`, [guide](docs/syslog.md)) |
+| Sending to a syslog daemon, journald | Planned ([roadmap, section 10](docs/roadmap.md#10-ecosystem-bridges)) |
 | OpenTelemetry Logs (OTLP) | Planned (same section) |
 
 ## Guides
@@ -144,6 +145,7 @@ Every output format is an exporter in the decoder, so adding one costs the progr
 | [Embedded Rust](docs/embedded.md) | `no_std` setup, linker snippet, getting the contract from firmware |
 | [C and C++](docs/c-cpp.md) | Header-only producer for Linux, macOS, Windows and bare metal: build, capture, decode |
 | [Zephyr](docs/zephyr.md) | Module, Kconfig, transports |
+| [Send logs to syslog](docs/syslog.md) | RFC 5424 lines from a capture, for rsyslog, syslog-ng or a log collector |
 | [Ship without the format strings](docs/strip.md) | Stripped builds: a smaller image with no log text in it, and `rtlog verify` as a release gate |
 | [Configuration and CLI](docs/reference.md) | Levels, environment variables, features, every `rtlog` command and option, the JSON output |
 | [Performance and size](docs/performance.md) | Cycles per call, flash and RAM, measuring on your board |

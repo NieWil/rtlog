@@ -11,17 +11,24 @@
 use std::io::{IsTerminal, Write};
 use std::process::ExitCode;
 
-use rtlog_decode::{decode_with, Contract, Options, Output};
+use rtlog_decode::{decode_with, syslog, Contract, Options, Output};
 
 const USAGE: &str = "usage:
-  rtlog decode --contract <contract.jsonl> [--out text|json|perfetto] [-o <file>]
-               [--color auto|always|never] [--no-spans] [--force] <stream.rtlog>
+  rtlog decode --contract <contract.jsonl> [--out text|json|perfetto|syslog]
+               [-o <file>] [--color auto|always|never] [--no-spans] [--force]
+               [--syslog-start <time> | --syslog-epoch <time>] [--syslog-host <name>]
+               [--syslog-app <name>] [--syslog-facility <name|0-23>]
+               [--syslog-sd-id <name>] <stream.rtlog>
   rtlog check <contract.jsonl>
   rtlog contract --elf <binary> [-o <contract.jsonl>]
   rtlog verify --contract <contract.jsonl> <image>...
 
   --json and --perfetto are short for --out json and --out perfetto.
   Perfetto output opens in https://ui.perfetto.dev (Open trace file).
+  Syslog output is RFC 5424 lines. --syslog-start is the wall-clock time of
+  the capture's first event, --syslog-epoch that of the target's time zero,
+  as Unix seconds or 2026-11-17T09:30:00Z; without either the lines carry no
+  timestamp and the receiver adds its own.
   `contract --elf` reads the binary that was built: ELF (Linux, firmware),
   Mach-O (macOS) or PE (Windows); `--binary` is the same option. A Rust
   program can also write its contract with rtlog::contract::write(path).
@@ -51,6 +58,7 @@ fn run(args: &[String]) -> Result<(), String> {
             let mut out_file: Option<String> = None;
             let mut color = "auto".to_owned();
             let mut opts = Options::default();
+            let mut sys = syslog::Config::default();
             let mut it = args[1..].iter();
             while let Some(a) = it.next() {
                 let mut value =
@@ -64,11 +72,33 @@ fn run(args: &[String]) -> Result<(), String> {
                             "text" => Output::Text,
                             "json" => Output::Json,
                             "perfetto" | "chrome" => Output::Perfetto,
+                            "syslog" => Output::Syslog,
                             o => return Err(format!("unknown output {o:?}\n{USAGE}")),
                         }
                     }
                     "-o" | "--output" => out_file = Some(value("-o")?),
                     "--color" => color = value("--color")?,
+                    "--syslog-epoch" => {
+                        let v = value("--syslog-epoch")?;
+                        sys.epoch_ns = Some(syslog::parse_epoch(&v).ok_or(format!(
+                            "--syslog-epoch {v:?}: expected Unix seconds or a time like 2026-11-17T09:30:00Z"
+                        ))?);
+                    }
+                    "--syslog-start" => {
+                        let v = value("--syslog-start")?;
+                        sys.start_ns = Some(syslog::parse_epoch(&v).ok_or(format!(
+                            "--syslog-start {v:?}: expected Unix seconds or a time like 2026-11-17T09:30:00Z"
+                        ))?);
+                    }
+                    "--syslog-host" => sys.hostname = value("--syslog-host")?,
+                    "--syslog-app" => sys.app_name = value("--syslog-app")?,
+                    "--syslog-facility" => {
+                        let v = value("--syslog-facility")?;
+                        sys.facility = syslog::facility(&v).ok_or(format!(
+                            "--syslog-facility {v:?}: expected 0 to 23 or a name such as user, daemon, local0"
+                        ))?;
+                    }
+                    "--syslog-sd-id" => sys.sd_id = value("--syslog-sd-id")?,
                     "--no-spans" => opts.spans = false,
                     "--force" => opts.force = true,
                     s if s.starts_with('-') => return Err(format!("unknown option {s}\n{USAGE}")),
@@ -88,7 +118,11 @@ fn run(args: &[String]) -> Result<(), String> {
             let contract = load_contract(&contract.ok_or(USAGE)?)?;
             let path = stream.ok_or(USAGE)?;
             let bytes = std::fs::read(&path).map_err(|e| format!("{path}: {e}"))?;
-            let d = decode_with(&contract, &bytes, &opts).map_err(|e| format!("{path}: {e}"))?;
+            let d = match opts.output {
+                Output::Syslog => syslog::decode(&contract, &bytes, &opts, &sys),
+                _ => decode_with(&contract, &bytes, &opts),
+            }
+            .map_err(|e| format!("{path}: {e}"))?;
             match &out_file {
                 Some(f) => std::fs::write(f, &d.text).map_err(|e| format!("{f}: {e}"))?,
                 None => {

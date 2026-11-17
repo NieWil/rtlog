@@ -598,3 +598,181 @@ fn verify_rejects_bad_arguments() {
         .unwrap();
     assert!(failed(&out).starts_with(&format!("{}: ", missing.display())));
 }
+
+/// Whether `line` is an RFC 5424 message with one structured-data element:
+/// `<PRI>1 TIMESTAMP HOSTNAME APP-NAME PROCID MSGID [ID NAME="VALUE"...] MSG`.
+fn is_rfc5424(line: &str) -> bool {
+    fn printable(s: &str, max: usize) -> bool {
+        (1..=max).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_graphic())
+    }
+    fn check(line: &str) -> Option<()> {
+        let rest = line.strip_prefix('<')?;
+        let (pri, rest) = rest.split_once('>')?;
+        (pri.len() <= 3 && pri.parse::<u8>().ok()? <= 191).then_some(())?;
+        let mut head = rest.splitn(7, ' ');
+        (head.next()? == "1").then_some(())?;
+        let stamp = head.next()?;
+        let b = stamp.as_bytes();
+        let timed = b.len() == 27
+            && b.iter().enumerate().all(|(i, c)| match i {
+                4 | 7 => *c == b'-',
+                10 => *c == b'T',
+                13 | 16 => *c == b':',
+                19 => *c == b'.',
+                26 => *c == b'Z',
+                _ => c.is_ascii_digit(),
+            });
+        (stamp == "-" || timed).then_some(())?;
+        for max in [255, 48, 128, 32] {
+            printable(head.next()?, max).then_some(())?;
+        }
+        // [ID( NAME="VALUE")*] with `"`, `\` and `]` escaped inside a value.
+        let mut sd = head.next()?.strip_prefix('[')?.chars();
+        let mut name = String::new();
+        loop {
+            match sd.next()? {
+                ']' => break,
+                // The element's name ends at a space, a parameter's at `=`;
+                // the space after a value follows no name.
+                c @ (' ' | '=') => {
+                    if c == '=' || !name.is_empty() {
+                        (printable(&name, 32) && !name.contains(['"', ']'])).then_some(())?;
+                    }
+                    name.clear();
+                }
+                '"' => loop {
+                    match sd.next()? {
+                        '"' => break,
+                        '\\' => (matches!(sd.next()?, '"' | '\\' | ']' | 'n')).then_some(())?,
+                        ']' => return None,
+                        _ => {}
+                    }
+                },
+                c => name.push(c),
+            }
+        }
+        let msg = sd.as_str().strip_prefix(' ')?;
+        (!msg.chars().any(char::is_control)).then_some(())
+    }
+    check(line).is_some()
+}
+
+#[test]
+fn the_rfc5424_check_refuses_malformed_lines() {
+    let good = r#"<14>1 2026-11-17T09:30:00.000412Z gw1 app main 2f6c01aa [rtlog@32473 level="info" q="a\"b\]c"] pid out=0.42"#;
+    assert!(is_rfc5424(good));
+    assert!(is_rfc5424(
+        &good.replace("2026-11-17T09:30:00.000412Z", "-")
+    ));
+    for bad in [
+        good.replace("<14>", "<192>"),
+        good.replace("<14>1", "<14>2"),
+        good.replace("T09", " 09"),
+        good.replace(" gw1 ", "  "),
+        good.replace(r#"a\"b\]c"#, "a]b"),
+        good.replace(r#"a\"b\]c"#, r"a\xb"),
+        good.replace("] pid", "]pid"),
+        good.replace("[rtlog@32473", "rtlog@32473"),
+        format!("{good}\tx"),
+    ] {
+        assert!(!is_rfc5424(&bad), "{bad}");
+    }
+}
+
+#[test]
+fn cli_writes_syslog_lines() {
+    let dir = Scratch::new("syslog");
+    let (contract, stream) = dir.contract_and_stream();
+
+    // Defaults: facility user, no timestamp, no host.
+    let stdout = succeeded(&decode(&contract, &stream, &["--out", "syslog"]));
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines.len(), 3, "span, info, warn: {stdout}");
+    assert!(lines.iter().all(|l| is_rfc5424(l)), "{stdout}");
+    let info = lines
+        .iter()
+        .find(|l| l.ends_with("cli speed=1200 ok=true"))
+        .unwrap();
+    assert!(info.starts_with("<14>1 - - rtlog "), "{info}");
+    assert!(
+        info.contains(" [rtlog@32473 level=\"info\" file=\""),
+        "{info}"
+    );
+    let warn = lines.iter().find(|l| l.ends_with("cli temp=81")).unwrap();
+    assert!(warn.starts_with("<12>1 - - rtlog "), "{warn}");
+    assert!(
+        lines.iter().any(|l| l.contains("] span cli.step took ")),
+        "{stdout}"
+    );
+
+    let stdout = succeeded(&decode(
+        &contract,
+        &stream,
+        &[
+            "--out",
+            "syslog",
+            "--no-spans",
+            "--syslog-epoch",
+            "2026-11-17T09:30:00Z",
+            "--syslog-host",
+            "gw1",
+            "--syslog-app",
+            "motor",
+            "--syslog-facility",
+            "local0",
+            "--syslog-sd-id",
+            "acme@4242",
+        ],
+    ));
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines.len(), 2, "{stdout}");
+    for l in &lines {
+        assert!(is_rfc5424(l), "{l}");
+        assert!(
+            l.starts_with("<134>1 2026-11-17T") || l.starts_with("<132>1 2026-11-17T"),
+            "{l}"
+        );
+        assert!(l.contains("Z gw1 motor "), "{l}");
+        assert!(l.contains(" [acme@4242 level=\""), "{l}");
+    }
+
+    let err = failed(&decode(
+        &contract,
+        &stream,
+        &["--out", "syslog", "--syslog-epoch", "noon"],
+    ));
+    assert!(
+        err.contains("--syslog-epoch \"noon\": expected Unix seconds"),
+        "{err}"
+    );
+    // The first line of the capture is stamped with --syslog-start.
+    let stdout = succeeded(&decode(
+        &contract,
+        &stream,
+        &["--out", "syslog", "--syslog-start", "1794907800"],
+    ));
+    // The capture begins with the span opening; every line is within the
+    // same second of that moment.
+    assert!(
+        stdout
+            .lines()
+            .all(|l| l.contains(">1 2026-11-17T09:30:00.")),
+        "{stdout}"
+    );
+    let err = failed(&decode(
+        &contract,
+        &stream,
+        &["--out", "syslog", "--syslog-start", "noon"],
+    ));
+    assert!(err.contains("--syslog-start \"noon\": expected"), "{err}");
+
+    let err = failed(&decode(
+        &contract,
+        &stream,
+        &["--out", "syslog", "--syslog-facility", "24"],
+    ));
+    assert!(
+        err.contains("--syslog-facility \"24\": expected 0 to 23"),
+        "{err}"
+    );
+}

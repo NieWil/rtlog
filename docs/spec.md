@@ -333,7 +333,7 @@ MCU crash capture (exception frame into flash or `.noinit`) is on the roadmap.
 
 ## 9. Host decoder
 
-The decoder (`rtlog-decode`, a library plus the `rtlog` CLI) turns a stream and a contract into text, JSON lines or a Perfetto trace, frame by frame.
+The decoder (`rtlog-decode`, a library plus the `rtlog` CLI) turns a stream and a contract into text, JSON lines, a Perfetto trace or syslog lines, frame by frame.
 
 **Pipeline**
 
@@ -349,13 +349,14 @@ The decoder (`rtlog-decode`, a library plus the `rtlog` CLI) turns a stream and 
 | Text | default | `12.345678 [motor] INFO  pid out=0.42 err=-3`, colours with `--color` |
 | JSON lines | `--json` | one object per record, with `type` (`log`, `span`, `dropped`, `gap`, `crash`); a `log` record has `ts_ns`, `ctx`, `ctx_name`, `level`, `site`, `module`, `file`, `line`, `message`, `args` ([all fields](reference.md#json-lines-output)) |
 | Perfetto / Chrome trace | `--perfetto` | contexts to tracks, spans to slices, records to instant events, crashes to markers; opens in ui.perfetto.dev |
+| Syslog | `--out syslog` | one RFC 5424 line per record, finished span, drop report, gap and crash; severity from the level, the context name as process ID, the site ID as message ID, and level, file, line, module and target time as structured data ([guide](syslog.md)) |
 | Frame by frame | library (`stream::Session::decode_frame`) | for in-process consumers such as the stdout mode |
 
 ## 10. Integration with open logging ecosystems
 
-Implemented today: the Perfetto / Chrome trace output (section 9), which also opens in Speedscope and `chrome://tracing`, and JSON lines for any log pipeline. The span model shared by every output is `span_open{id, parent, site}` and `span_close{id}` with 64-bit IDs (high 32 bits = context, low 32 = counter) and the parent carried explicitly, so nesting survives.
+Implemented today: the Perfetto / Chrome trace output (section 9), which also opens in Speedscope and `chrome://tracing`, JSON lines for any log pipeline, and RFC 5424 syslog lines (`--out syslog`). The span model shared by every output is `span_open{id, parent, site}` and `span_close{id}` with 64-bit IDs (high 32 bits = context, low 32 = counter) and the parent carried explicitly, so nesting survives.
 
-Backends for the `log`, `tracing` and `defmt` facades, and outputs for syslog, OTLP, CTF and SystemView, are on the roadmap.
+Backends for the `log`, `tracing` and `defmt` facades, sending syslog lines to a daemon, and outputs for journald, OTLP, CTF and SystemView, are on the roadmap.
 
 ## 10b. Threat model
 

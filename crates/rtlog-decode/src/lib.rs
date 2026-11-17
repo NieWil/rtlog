@@ -1,9 +1,11 @@
 //! Host decoder for [rtlog](https://docs.rs/rtlog): joins a stream with its
-//! contract and renders text, JSON lines or a Perfetto / Chrome trace.
+//! contract and renders text, JSON lines, a Perfetto / Chrome trace or
+//! syslog lines.
 //!
 //! - [`decode`] / [`decode_with`]: a whole capture at once; [`stream::Decoder`]
 //!   event by event. After a damaged frame decoding resumes at the next resync
 //!   frame and the gap is reported.
+//! - [`syslog`]: RFC 5424 lines for a syslog daemon or a log collector.
 //! - [`stdout::init`]: text on stdout while the program runs, like `env_logger`.
 //! - [`elf::contract_from_binary`]: the contract from an ELF, Mach-O or PE
 //!   binary, firmware included.
@@ -33,6 +35,7 @@ mod perfetto;
 pub mod render;
 pub mod stdout;
 pub mod stream;
+pub mod syslog;
 pub mod value;
 
 use std::collections::HashMap;
@@ -51,6 +54,8 @@ pub enum Output {
     Json,
     /// Chrome trace-event JSON for Perfetto, `chrome://tracing` or Speedscope.
     Perfetto,
+    /// RFC 5424 syslog lines, one per record; see [`syslog`].
+    Syslog,
 }
 
 /// Decoding options.
@@ -368,6 +373,16 @@ pub fn decode_with(
     bytes: &[u8],
     opts: &Options,
 ) -> Result<Decoded, DecodeError> {
+    decode_inner(contract, bytes, opts, &syslog::Config::default())
+}
+
+/// [`decode_with`], with the settings of the syslog output.
+pub(crate) fn decode_inner(
+    contract: &Contract,
+    bytes: &[u8],
+    opts: &Options,
+    syslog: &syslog::Config,
+) -> Result<Decoded, DecodeError> {
     let mut dec = Decoder::new(contract, bytes, opts.force)?;
     let mismatched = dec.mismatched;
     let clock_hz = dec.header().clock_hz;
@@ -472,6 +487,9 @@ pub fn decode_with(
 
     match opts.output {
         Output::Perfetto => result.text = perfetto::export(&items, &names, clock_hz),
+        Output::Syslog => {
+            result.text = syslog::export(&items, &names, mismatched, opts.spans, syslog)
+        }
         Output::Json => {
             let mut open: HashMap<u64, (u64, u64, &str)> = HashMap::new();
             for item in &items {
