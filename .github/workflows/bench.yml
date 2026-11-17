@@ -114,7 +114,10 @@ jobs:
       # pinned revision, its access log through log, tracing and rtlog. The
       # instruction counts of the access-log call gate; throughput, call-time
       # percentiles and memory of a 3 s run on this shared runner are recorded.
-      - name: Pingora access log (a growth of an instruction count of more than 2 % fails)
+      # 5 %, not 2 %: on one machine the count is the same on every run, but
+      # it differs by up to 2 % between CPU models (the C library picks its
+      # copy and formatting routines by CPU), and runners are not all alike.
+      - name: Pingora access log (a growth of an instruction count of more than 5 % fails)
         if: matrix.what == 'pingora'
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq cmake valgrind >/dev/null
@@ -123,7 +126,7 @@ jobs:
           # shellcheck disable=SC2086 # the branch arguments are a list of options
           bencher run ${{ steps.branch.outputs.args }} \
             --testbed pingora-ubuntu-latest \
-            --threshold-measure instructions --threshold-test percentage --threshold-upper-boundary 0.02 \
+            --threshold-measure instructions --threshold-test percentage --threshold-upper-boundary 0.05 \
             --thresholds-reset \
             --error-on-alert \
             --adapter json \

@@ -50,7 +50,7 @@ The [`bench` workflow](../.github/workflows/bench.yml) sends two sets of numbers
 | --- | --- | --- | --- |
 | Flash and RAM of the five `size/mcu` variants, fixed runtime code, code per call site (bytes) | `scripts/size_report.py --bmf` | No | Fails when one grows more than 2 % over `main` |
 | Instructions per log call for six workloads | `scripts/icount.py --bmf` (callgrind on `examples/icount.rs`) | No | Fails when one grows more than 2 % over `main` |
-| Instructions per access-log call in the Pingora reference application, for `log`, `log-buf`, `tracing` and rtlog | `reference/pingora/run.sh` with `PINGORA_BMF` | No (within 0.01 %) | Fails when one grows more than 2 % over `main` |
+| Instructions per access-log call in the Pingora reference application, for `log`, `log-buf`, `tracing` and rtlog | `reference/pingora/run.sh` with `PINGORA_BMF` | Not on one machine (within 0.01 %); up to 2 % between CPU models | Fails when one grows more than 5 % over `main` |
 | Pingora throughput, 99th percentile and longest access-log call, peak memory | the same run, 3 s on a shared runner | Yes | Recorded only |
 | Criterion timings of the log call and the decoder (ns) | `cargo bench` on a shared GitHub runner | By several percent | Reported with a t-test against the history; never fails |
 

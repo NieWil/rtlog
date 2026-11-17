@@ -6,7 +6,7 @@ This directory is the first step of the port: Pingora's own code is unchanged, a
 
 Pinned to Pingora 0.9.0, revision `3f87e92c` (in `Cargo.toml`). The crate is outside the host workspace, like `size/mcu`.
 
-CI runs a short round on every pull request (`bench` workflow, job `Bencher (pingora)`) and sends the instruction counts to Bencher, where a growth of more than 2 % fails the pull request.
+CI runs a short round on every pull request (`bench` workflow, job `Bencher (pingora)`) and sends the instruction counts to Bencher, where a growth of more than 5 % fails the pull request.
 
 ## Run it
 
@@ -33,7 +33,7 @@ Intel Xeon at 2.30 GHz, 4 virtual CPUs of a shared cloud VM, Linux 6.18, rustc 1
 
 ### Instructions per access-log call
 
-Counted with callgrind inside the one function that makes the log call: 20 000 calls with fixed fields from one thread, without the proxy (`rtlog-reference-pingora icount <logger>`), after one call that sets the logger up. This is the number to rely on. Two runs gave the same count for `log` and `log-buf` and counts within 0.01 % of each other for `tracing` and rtlog.
+Counted with callgrind inside the one function that makes the log call: 20 000 calls with fixed fields from one thread, without the proxy (`rtlog-reference-pingora icount <logger>`), after one call that sets the logger up. This is the number to rely on. On one machine two runs gave the same count for `log` and `log-buf` and counts within 0.01 % of each other for `tracing` and rtlog. Between machines it moves a little: GitHub's runner counted 9743, 9826, 9165 and 308 for the same commit, 1.4 to 2 % less, because the C library picks its copy and formatting routines by CPU model. The ratio between loggers is the same.
 
 | Access log | Instructions per call | Against rtlog |
 | --- | ---: | ---: |
