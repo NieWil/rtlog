@@ -44,12 +44,14 @@ A log call costs 6–8× less than formatting the same line, and meets the spec'
 
 ## Tracked over time
 
-The [`bench` workflow](../.github/workflows/bench.yml) sends two sets of numbers to [Bencher](https://bencher.dev), to the project named by the repository variable `BENCHER_PROJECT` (`niewil-s-project`): one point per push to `main`, and a comparison with `main` on each pull request from this repository.
+The [`bench` workflow](../.github/workflows/bench.yml) sends two sets of numbers to [Bencher](https://bencher.dev), to the project named by the repository variable `BENCHER_PROJECT` (`niewil-s-project`): one point per push to `main`, and a comparison with `main` on each pull request from this repository. It runs only when a push or pull request changes something that can move a number: `crates/`, `examples/`, `size/`, `reference/pingora/`, the two measuring scripts, `Cargo.toml`, `Cargo.lock`, `.cargo/`, a `rust-toolchain` file or the workflow itself. A change to the docs or to `c/` starts no run. A new Rust release can move the numbers without any of these changing; start the workflow by hand ("Run workflow" on its Actions page) to record it.
 
 | Numbers | Source | Varies between runs | On a pull request |
 | --- | --- | --- | --- |
 | Flash and RAM of the five `size/mcu` variants, fixed runtime code, code per call site (bytes) | `scripts/size_report.py --bmf` | No | Fails when one grows more than 2 % over `main` |
 | Instructions per log call for six workloads | `scripts/icount.py --bmf` (callgrind on `examples/icount.rs`) | No | Fails when one grows more than 2 % over `main` |
+| Instructions per access-log call in the Pingora reference application, for `log`, `log-buf`, `tracing` and rtlog | `reference/pingora/run.sh` with `PINGORA_BMF` | Not on one machine (within 0.01 %); up to 2 % between CPU models | Fails when one grows more than 5 % over `main` |
+| Pingora throughput, 99th percentile and longest access-log call, peak memory | the same run, 3 s on a shared runner | Yes | Recorded only |
 | Criterion timings of the log call and the decoder (ns) | `cargo bench` on a shared GitHub runner | By several percent | Reported with a t-test against the history; never fails |
 
 The instruction counts are what makes a speed regression visible on a shared runner: callgrind counts the instructions executed inside each workload function, which does not depend on the machine's load. On x86-64 with rustc 1.97.0 a two-argument call executes 73.5 instructions through an explicit producer and 77.5 into the thread-local ring; a call below the runtime level executes 6. They are instructions, not cycles: they show that the code path grew, not how long it takes. A new compiler release can move them, and then the history on `main` moves with it.
@@ -60,7 +62,7 @@ The repository secret `BENCHER_API_KEY` holds an API key of that project; the ke
 
 ## In a real application
 
-[`reference/pingora`](../reference/pingora/README.md) puts rtlog under Cloudflare's Pingora proxy, where every request writes an access log record. On a 4-vCPU Xeon at 2.30 GHz (shared VM, 32 connections, 4 proxy threads) the access-log call takes about 9.7 µs through `log` with `env_logger` and about 270 ns through rtlog; the proxy serves 7 to 11 % fewer requests with the `log` access log and no measurable difference with rtlog; the log takes 54.9 bytes per request against 139.7.
+[`reference/pingora`](../reference/pingora/README.md) puts rtlog under Cloudflare's Pingora proxy, where every request writes an access log record. The access-log call executes 9 351 to 9 965 instructions through `log` with `env_logger` (buffered or not) or through `tracing` with a non-blocking writer, and 313 through rtlog (callgrind, x86-64, rustc 1.97.0, same count on every run): formatting the line is the cost, and it stays on the calling thread whatever writes the file. Inside the running proxy on a 4-vCPU Xeon at 2.30 GHz (shared VM, 32 connections, 4 proxy threads), 99 % of the rtlog calls take under 0.7 µs, against 74 to 164 µs for the text loggers; the proxy serves 6 to 15 % fewer requests with a text access log; peak memory is the same within 1 MiB for no log, `log` and rtlog, and about 3 MiB higher with `tracing`; the log takes 54.9 bytes per request against 139.7. The instruction counts are tracked in Bencher and gate pull requests.
 
 ## Measure on your platform
 
