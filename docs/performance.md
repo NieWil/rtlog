@@ -54,6 +54,7 @@ The [`bench` workflow](../.github/workflows/bench.yml) sends two sets of numbers
 Timings from a shared runner are an indication only. The cycle counts this page quotes come from `examples/timing.rs` on named machines.
 
 The project starts unclaimed, which needs no account. To own it, sign in on bencher.dev, claim `rtlog-niewil`, create a project API key and store it as the repository secret `BENCHER_API_KEY`; the workflow uses it when it is set. The key must belong to the project the workflow sends to, or Bencher answers "Invalid project key". To use a project with another slug, set the repository variable `BENCHER_PROJECT` to it.
+
 ## In a real application
 
 [`reference/pingora`](../reference/pingora/README.md) puts rtlog under Cloudflare's Pingora proxy, where every request writes an access log record. On a 4-vCPU Xeon at 2.30 GHz (shared VM, 32 connections, 4 proxy threads) the access-log call takes about 9.7 µs through `log` with `env_logger` and about 270 ns through rtlog; the proxy serves 7 to 11 % fewer requests with the `log` access log and no measurable difference with rtlog; the log takes 54.9 bytes per request against 139.7.
