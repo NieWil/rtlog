@@ -118,6 +118,23 @@ cargo run --release -p rtlog-examples --example perfetto_quickstart
 
 Each call site gets an ID at build time; its format string goes into a contract. The program can write the contract itself (`rtlog::contract::write`, any OS), or the host reads it from the binary (`rtlog contract --elf`: ELF on Linux and firmware, Mach-O on macOS, PE on Windows). [Architecture →](docs/architecture.md)
 
+The design has four stages, and each has one job:
+
+| Stage | Where | What it does | What it never does |
+| --- | --- | --- | --- |
+| Log call | The program, on the calling thread | Writes the site ID, a timestamp and the raw arguments into the thread's ring | Format, allocate, lock, make a system call, wait |
+| Drain | The program, on its own thread or in the idle loop | Sends the frames out: a file, stdout, a UART, RTT; a crash dump when the process dies | Slow down a log call: a full ring drops and counts |
+| Contract | The build | Maps each site ID to its level, file, line and format string; read from the binary or written by the program | Reach the device in a [stripped build](docs/strip.md) |
+| Decoder and exporters | The host (`rtlog` CLI, `rtlog-decode` library) | Joins frames and contract, then writes the output format | Run on the device |
+
+Every output format is an exporter in the decoder, so adding one costs the program nothing:
+
+| Exporter | State |
+| --- | --- |
+| Text, JSON lines, Perfetto timeline | Built (`rtlog decode --out text\|json\|perfetto`) |
+| syslog (RFC 5424), journald | Planned ([roadmap, section 10](docs/roadmap.md#10-ecosystem-bridges)) |
+| OpenTelemetry Logs (OTLP) | Planned (same section) |
+
 ## Guides
 
 | | |
@@ -144,6 +161,7 @@ Each call site gets an ID at build time; its format string goes into a contract.
   sudo apt install ./rtlog-dev_<version>-1_all.deb    # rtlog.h for C/C++, with pkg-config
   ```
 
+- **Other Linux distributions**: no package in a distribution's own repository yet. The static CLI from the releases page runs on any of them; packages you can add as a repository (AUR, PPA, COPR, a Yocto layer) are [planned](docs/roadmap.md#12-adoption-a-representative-application-and-being-easy-to-find-and-try).
 - **Rust**: `cargo add rtlog` (for bare metal: `cargo add rtlog --no-default-features`).
 - **Demo**: `rtlog-demo-<version>-<target>` on the releases page runs the timing report and a traced app on any of those machines. [How →](docs/demo.md)
 - **C / C++ / Zephyr**: the `rtlog-c` package on the releases page, or [`c/include/rtlog.h`](c/include/rtlog.h) and the [Zephyr module](docs/zephyr.md).
