@@ -1,0 +1,102 @@
+name: bench
+
+# Continuous benchmarking with Bencher (https://bencher.dev): every push to
+# `main` adds a point to the history, and a pull request from this repository
+# is compared with it, with the result posted on the pull request.
+#
+# Two kinds of numbers go in, and they are treated differently:
+# - sizes on Cortex-M4F (flash, RAM, code per call site) are the same on every
+#   run, so a pull request that grows one by more than 2 % fails this workflow;
+# - Criterion timings come from a shared runner and vary by several percent,
+#   so they are tracked and reported but never fail the workflow.
+#
+# The Bencher project is `rtlog-niewil`, or the slug in the repository variable
+# BENCHER_PROJECT. Without the BENCHER_API_KEY secret the runs go to it as an
+# unclaimed project; once the project is claimed on bencher.dev, add an API
+# key of that same project as the repository secret (docs/performance.md).
+# A key of another project is refused with "Invalid project key".
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, reopened, synchronize]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  BENCHER_PROJECT: ${{ vars.BENCHER_PROJECT || 'rtlog-niewil' }}
+  BENCHER_API_KEY: ${{ secrets.BENCHER_API_KEY }}
+
+jobs:
+  bencher:
+    name: Bencher (${{ matrix.what }})
+    # Pull requests from forks have no access to the secret and may not
+    # comment; they still get the size and timing reports of ci.yml.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    strategy:
+      fail-fast: false
+      matrix:
+        what: [size, timing]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: thumbv7em-none-eabihf
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: bench-${{ matrix.what }}
+          workspaces: |
+            .
+            size/mcu
+      - uses: bencherdev/bencher@main
+      - name: Branch and baseline
+        id: branch
+        run: |
+          if [ "${{ github.event_name }}" = pull_request ]; then
+            echo "args=--branch $GITHUB_HEAD_REF --hash ${{ github.event.pull_request.head.sha }} --start-point $GITHUB_BASE_REF --start-point-hash ${{ github.event.pull_request.base.sha }} --start-point-clone-thresholds --start-point-reset" >> "$GITHUB_OUTPUT"
+          else
+            echo "args=--branch main" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Sizes on Cortex-M4F (a growth of more than 2 % fails)
+        if: matrix.what == 'size'
+        run: |
+          # An empty key is not "no key": without the secret, leave the variable out.
+          [ -n "$BENCHER_API_KEY" ] || unset BENCHER_API_KEY
+          # shellcheck disable=SC2086 # the branch arguments are a list of options
+          bencher run ${{ steps.branch.outputs.args }} \
+            --testbed thumbv7em-none-eabihf \
+            --threshold-measure flash-bytes --threshold-test percentage --threshold-upper-boundary 0.02 \
+            --threshold-measure ram-bytes --threshold-test percentage --threshold-upper-boundary 0.02 \
+            --threshold-measure code-bytes --threshold-test percentage --threshold-upper-boundary 0.02 \
+            --thresholds-reset \
+            --error-on-alert \
+            --adapter json \
+            --file sizes.json \
+            --github-actions '${{ secrets.GITHUB_TOKEN }}' \
+            "python3 scripts/size_report.py --bmf sizes.json"
+      - name: Criterion timings on a shared runner (reported, never failing)
+        if: matrix.what == 'timing'
+        run: |
+          # An empty key is not "no key": without the secret, leave the variable out.
+          [ -n "$BENCHER_API_KEY" ] || unset BENCHER_API_KEY
+          # shellcheck disable=SC2086 # the branch arguments are a list of options
+          bencher run ${{ steps.branch.outputs.args }} \
+            --testbed ubuntu-latest \
+            --threshold-measure latency --threshold-test t_test --threshold-max-sample-size 64 --threshold-upper-boundary 0.99 \
+            --thresholds-reset \
+            --adapter rust_criterion \
+            --github-actions '${{ secrets.GITHUB_TOKEN }}' \
+            "cargo bench -p rtlog --bench log_call -- --warm-up-time 1 --measurement-time 3 && cargo bench -p rtlog-decode --bench decode -- --warm-up-time 1 --measurement-time 3"

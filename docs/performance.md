@@ -42,6 +42,19 @@ A log call costs 6–8× less than formatting the same line, and meets the spec'
 - 10 messages cost **3.3 KB** of flash with rtlog against **18.3 KB** with `core::fmt`: 5.6× smaller.
 - With the `strip` feature the descriptors and their strings are not in flash: the 10-call-site firmware takes 3 796 B against 4 536 B unstripped (both built with rustc 1.97.0; the table above is from an earlier compiler), 740 B or 16 % less. [How to strip →](strip.md)
 
+## Tracked over time
+
+The [`bench` workflow](../.github/workflows/bench.yml) sends two sets of numbers to [Bencher](https://bencher.dev), to the project named by the repository variable `BENCHER_PROJECT` (`niewil-s-project`): one point per push to `main`, and a comparison with `main` on each pull request from this repository.
+
+| Numbers | Source | Varies between runs | On a pull request |
+| --- | --- | --- | --- |
+| Flash and RAM of the five `size/mcu` variants, fixed runtime code, code per call site (bytes) | `scripts/size_report.py --bmf` | No | Fails when one grows more than 2 % over `main` |
+| Criterion timings of the log call and the decoder (ns) | `cargo bench` on a shared GitHub runner | By several percent | Reported with a t-test against the history; never fails |
+
+Timings from a shared runner are an indication only. The cycle counts this page quotes come from `examples/timing.rs` on named machines.
+
+The repository secret `BENCHER_API_KEY` holds an API key of that project; the key must belong to the project the workflow sends to, or Bencher answers "Invalid project key". Without the variable and the secret (a fork, for example) the workflow sends to an unclaimed project `rtlog-niewil`, which needs no account.
+
 ## In a real application
 
 [`reference/pingora`](../reference/pingora/README.md) puts rtlog under Cloudflare's Pingora proxy, where every request writes an access log record. On a 4-vCPU Xeon at 2.30 GHz (shared VM, 32 connections, 4 proxy threads) the access-log call takes about 9.7 µs through `log` with `env_logger` and about 270 ns through rtlog; the proxy serves 7 to 11 % fewer requests with the `log` access log and no measurable difference with rtlog; the log takes 54.9 bytes per request against 139.7.

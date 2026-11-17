@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- CI: sizes on Cortex-M4F and Criterion timings are tracked over time with Bencher (`.github/workflows/bench.yml`; project from the repository variable `BENCHER_PROJECT`). A pull request that grows a size by more than 2 % over `main` fails; timings from the shared runner are reported only. `scripts/size_report.py --bmf` writes the sizes as Bencher Metric Format JSON.
 - Docs: rtlog's range is stated as "from microcontrollers to multi-core servers" instead of "from Cortex-M to Linux", and the README has a "Where it runs" table (targets, languages, what CI checks on each).
 - **Reference application: Pingora** (`reference/pingora`, roadmap 12a). Cloudflare's proxy at a pinned revision, with its per-request access log written through `log` + `env_logger` or through rtlog, an upstream and a load generator in one binary. On a 4-vCPU Xeon at 2.30 GHz the access-log call takes about 9.7 µs with `log` and about 270 ns with rtlog; throughput drops 7 to 11 % with `log` and by nothing measurable with rtlog; the log is 54.9 bytes per request against 139.7. The README there has the method, three rounds of numbers and a survey of Pingora's 552 call sites (40 % port with a macro rename). CI builds it and runs a short round.
 - Roadmap: a new section 12 (adoption) with incremental steps for a ported real application as the cost reference, logger comparisons, bridges, live decoding, installation and first impression; the release plan says which step lands in which version.
