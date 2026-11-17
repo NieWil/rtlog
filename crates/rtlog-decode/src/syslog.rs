@@ -237,8 +237,8 @@ fn message(s: &str) -> String {
 
 struct Writer<'a> {
     cfg: &'a Config,
-    /// Wall-clock time of the target's time zero.
-    epoch_ns: Option<u64>,
+    /// Where the target's clock sits in wall-clock time, if known.
+    clock: Option<crate::WallClock>,
     names: &'a HashMap<u32, String>,
     hostname: String,
     app_name: String,
@@ -260,8 +260,8 @@ impl Writer<'_> {
         msg: &str,
     ) {
         let pri = u32::from(self.cfg.facility) * 8 + u32::from(severity);
-        let stamp = match self.epoch_ns {
-            Some(e) => rfc3339(e.saturating_add(ts_ns)),
+        let stamp = match self.clock {
+            Some(c) => rfc3339(c.at(ts_ns)),
             None => "-".to_owned(),
         };
         let procid = match ctx {
@@ -305,7 +305,7 @@ pub(crate) fn export(
 ) -> String {
     let mut w = Writer {
         cfg,
-        epoch_ns: crate::wall_epoch(items, cfg.epoch_ns, cfg.start_ns),
+        clock: crate::WallClock::new(items, cfg.epoch_ns, cfg.start_ns),
         names,
         hostname: field(&cfg.hostname, 255),
         app_name: field(&cfg.app_name, 48),
@@ -620,6 +620,34 @@ mod tests {
         assert!(
             out.starts_with("<14>1 2026-11-17T09:30:00.000411Z - rtlog main_loop "),
             "{out}"
+        );
+
+        // A target clock that counts from 1970 and reads later than the
+        // start time given: still only the difference counts.
+        let late = [Item::Dropped {
+            ts_ns: 0,
+            ctx: 2,
+            count: 1,
+        }]
+        .into_iter()
+        .chain((0..2).map(|i| {
+            Item::Record(crate::Record {
+                ts_ns: 1_900_000_000_000_000_000 + i * 1_000,
+                ctx: 1,
+                site: &info,
+                args: vec![crate::Value::U(i)],
+            })
+        }))
+        .collect::<Vec<_>>();
+        let out = export(&late, &names, false, true, &cfg);
+        let stamps: Vec<&str> = out.lines().map(|l| l.split(' ').nth(1).unwrap()).collect();
+        assert_eq!(
+            stamps,
+            [
+                "2026-11-17T09:30:00.000000Z",
+                "2026-11-17T09:30:00.000000Z",
+                "2026-11-17T09:30:00.000001Z"
+            ]
         );
 
         // No epoch: no timestamp. Spans off: no span line. A contract that

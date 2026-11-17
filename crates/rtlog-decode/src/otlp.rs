@@ -137,7 +137,7 @@ pub(crate) fn export(
     mismatched: bool,
     cfg: &Config,
 ) -> String {
-    let epoch = crate::wall_epoch(items, cfg.epoch_ns, cfg.start_ns);
+    let clock = crate::WallClock::new(items, cfg.epoch_ns, cfg.start_ns);
     let thread = |attrs: &mut Vec<Json>, ctx: u32| {
         let name = names
             .get(&ctx)
@@ -219,8 +219,8 @@ pub(crate) fn export(
             "body": { "stringValue": body },
             "attributes": attrs,
         });
-        if let Some(e) = epoch {
-            let t = e.saturating_add(ts_ns).to_string();
+        if let Some(c) = clock {
+            let t = c.at(ts_ns).to_string();
             record["timeUnixNano"] = json!(t);
             record["observedTimeUnixNano"] = json!(t);
         }
