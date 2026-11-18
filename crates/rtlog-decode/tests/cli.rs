@@ -851,3 +851,114 @@ fn cli_writes_otlp_json_lines() {
         "{err}"
     );
 }
+
+#[test]
+fn cli_writes_journal_entries() {
+    let dir = Scratch::new("journald");
+    let (contract, stream) = dir.contract_and_stream();
+
+    let stdout = succeeded(&decode(
+        &contract,
+        &stream,
+        &[
+            "--out",
+            "journald",
+            "--start",
+            "1794907800",
+            "--host",
+            "gw1",
+            "--app",
+            "motor",
+        ],
+    ));
+    let entries: Vec<&str> = stdout.trim_end().split("\n\n").collect();
+    assert_eq!(entries.len(), 3, "info, span, warn: {stdout}");
+    for e in &entries {
+        // Within the second that began at --start, in microseconds.
+        assert!(e.starts_with("__REALTIME_TIMESTAMP=1794907800"), "{e}");
+        assert!(
+            e.contains("\n_HOSTNAME=gw1\n") && e.contains("\nSYSLOG_IDENTIFIER=motor\n"),
+            "{e}"
+        );
+    }
+    assert!(
+        stdout.contains("\nMESSAGE=cli speed=1200 ok=true\nPRIORITY=6\n"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\nRTLOG_ARG_0=1200\nRTLOG_ARG_1=true\n"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\nMESSAGE=cli temp=81\nPRIORITY=4\n"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\nRTLOG_KIND=span\n") && stdout.contains("\nRTLOG_SPAN=cli.step\n"));
+
+    let stdout = succeeded(&decode(
+        &contract,
+        &stream,
+        &["--out", "journald", "--no-spans"],
+    ));
+    assert_eq!(stdout.trim_end().split("\n\n").count(), 2, "{stdout}");
+    assert!(stdout.starts_with("MESSAGE="), "no time given: {stdout}");
+}
+
+#[cfg(unix)]
+#[test]
+fn cli_sends_journal_entries_to_a_socket() {
+    let dir = Scratch::new("journald-socket");
+    let (contract, stream) = dir.contract_and_stream();
+    let socket = dir.0.join("journal.socket");
+    let server = std::os::unix::net::UnixDatagram::bind(&socket).unwrap();
+    // A datagram that never arrives fails the test instead of hanging it.
+    server
+        .set_read_timeout(Some(std::time::Duration::from_secs(20)))
+        .unwrap();
+
+    let out = decode(
+        &contract,
+        &stream,
+        &[
+            "--journald-socket",
+            socket.to_str().unwrap(),
+            "--start",
+            "0",
+            "--app",
+            "motor",
+        ],
+    );
+    assert_eq!(succeeded(&out), "", "nothing on stdout when sending");
+    assert!(
+        text(&out.stderr).contains(&format!(" -> 3 entries to {}", socket.display())),
+        "{out:?}"
+    );
+    let mut buf = [0u8; 4096];
+    let mut got = Vec::new();
+    for _ in 0..3 {
+        let n = server.recv(&mut buf).unwrap();
+        got.push(text(&buf[..n]));
+    }
+    for g in &got {
+        assert!(
+            g.starts_with("MESSAGE=") && g.contains("\nSYSLOG_IDENTIFIER=motor\n"),
+            "{g}"
+        );
+        assert!(!g.contains("__REALTIME_TIMESTAMP"), "{g}");
+    }
+    assert!(
+        got.iter()
+            .any(|g| g.starts_with("MESSAGE=cli temp=81\nPRIORITY=4\n")),
+        "{got:?}"
+    );
+
+    // Nobody listening: the command fails and names the socket.
+    drop(server);
+    std::fs::remove_file(&socket).unwrap();
+    let err = failed(&decode(
+        &contract,
+        &stream,
+        &["--journald-socket", socket.to_str().unwrap()],
+    ));
+    assert!(err.contains("journal.socket: "), "{err}");
+}
