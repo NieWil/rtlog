@@ -1,8 +1,8 @@
-# Real-Time Deferred Logger — Specification (v0.2.x)
+# Real-Time Deferred Logger — Specification (v0.3.x)
 
 Nov 2, 2026 · @Niels
 
-This document describes what rtlog **does**, as released in v0.2.x: the API, how site IDs and contracts are produced, the frame layout, the runtime, the crash log and the stdout mode, and the budgets that CI checks (`scripts/spec_check.py`). Everything that is planned but not built, including the material earlier versions of this spec presented as design, is in the [roadmap](roadmap.md); the [implementation notes](implementation.md) list where the code deviates from the first design.
+This document describes what rtlog **does**, as released in v0.3.x: the API, how site IDs and contracts are produced, the frame layout, the runtime, the crash log and the stdout mode, and the budgets that CI checks (`scripts/spec_check.py`). Everything that is planned but not built, including the material earlier versions of this spec presented as design, is in the [roadmap](roadmap.md); the [implementation notes](implementation.md) list where the code deviates from the first design.
 
 ## 0. Developer experience and API
 

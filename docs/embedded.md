@@ -31,7 +31,7 @@ Turn off the default `std` feature:
 
 ```toml
 [dependencies]
-rtlog = { version = "0.2", default-features = false }
+rtlog = { version = "0.3", default-features = false }
 ```
 
 or run `cargo add rtlog --no-default-features`.

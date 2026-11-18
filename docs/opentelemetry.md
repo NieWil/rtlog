@@ -17,7 +17,7 @@ Each output line is one `LogsData` object with up to 1000 log records. Shown her
       { "key": "host.name", "value": { "stringValue": "gw1" } }
     ] },
     "scopeLogs": [{
-      "scope": { "name": "rtlog", "version": "0.2.5" },
+      "scope": { "name": "rtlog", "version": "0.3.0" },
       "logRecords": [{
         "timeUnixNano": "1794907800000412000",
         "observedTimeUnixNano": "1794907800000412000",

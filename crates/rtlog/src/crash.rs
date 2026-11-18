@@ -21,7 +21,7 @@
 //! Rust), `SIGSEGV`, `SIGBUS`, `SIGFPE`, `SIGILL` and `SIGABRT` (so `abort()`
 //! and `panic = "abort"` too). It cannot see `SIGKILL` or power loss.
 //!
-//! On Windows (since 0.2.6): panics, and exceptions that no handler takes
+//! On Windows (since 0.3.0): panics, and exceptions that no handler takes
 //! (access violation, hardware division by zero, illegal instruction), through
 //! `SetUnhandledExceptionFilter`; the dump runs on the faulting thread's
 //! stack, and the record holds the exception code, the faulting address and

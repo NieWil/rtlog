@@ -15,7 +15,7 @@ manifest:
   projects:
     - name: rtlog
       url: https://github.com/NieWil/rtlog
-      revision: v0.2.5
+      revision: v0.3.0
       path: modules/lib/rtlog
 ```
 

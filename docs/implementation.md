@@ -1,4 +1,4 @@
-# Implementation notes — v0.2
+# Implementation notes — v0.3
 
 This file tracks how the code in `crates/` matches [the specification](spec.md): what is built, where it deviates, and what is left.
 

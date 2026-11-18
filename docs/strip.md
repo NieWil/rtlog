@@ -35,7 +35,7 @@ Archive it with the release; without it a capture cannot be decoded.
 
 ```toml
 [dependencies]
-rtlog = { version = "0.2", default-features = false, features = ["strip"] }
+rtlog = { version = "0.3", default-features = false, features = ["strip"] }
 ```
 
 In the linker script (`memory.x` with `cortex-m-rt`), replace the [section that keeps the descriptors in flash](embedded.md#keep-the-descriptors-in-flash) with:

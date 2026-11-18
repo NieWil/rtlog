@@ -79,21 +79,31 @@ jobs:
           - { target: armv7-unknown-linux-musleabihf, os: ubuntu-latest, cross: true, deb: armhf }
           - { target: arm-unknown-linux-musleabihf, os: ubuntu-latest, cross: true }
           - { target: riscv64gc-unknown-linux-gnu, os: ubuntu-latest, cross: true }
-          - { target: x86_64-apple-darwin, os: macos-latest }
-          - { target: aarch64-apple-darwin, os: macos-latest }
+          # One macOS job for both macOS targets: the Apple-silicon runner
+          # builds aarch64 natively and cross-compiles x86_64 (`also`), so a
+          # release waits for one macOS runner, not two. macOS runners are
+          # the scarce ones: two jobs for them could queue past 15 minutes
+          # while every other runner was free.
+          - { target: aarch64-apple-darwin, os: macos-latest, also: x86_64-apple-darwin }
           - { target: x86_64-pc-windows-msvc, os: windows-latest }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: ${{ matrix.also && format('{0},{1}', matrix.target, matrix.also) || matrix.target }}
       - if: matrix.cross
         uses: taiki-e/setup-cross-toolchain-action@v1
         with:
           target: ${{ matrix.target }}
       - name: Build (dist profile, fat LTO, stripped)
         run: cargo build --profile dist -p rtlog-decode --bin rtlog --target ${{ matrix.target }}
+      - name: Build the second target of this runner (${{ matrix.also }})
+        if: matrix.also
+        run: |
+          cargo build --profile dist -p rtlog-decode --bin rtlog --target ${{ matrix.also }}
+          cargo build --profile dist -p rtlog-examples --example timing --example perfetto_quickstart --example app_trace --example stdout_mode --target ${{ matrix.also }}
+          file target/${{ matrix.also }}/dist/rtlog
       - name: Smoke test
         if: matrix.cross || matrix.target == 'aarch64-apple-darwin' || matrix.os == 'windows-latest'
         shell: bash
@@ -107,17 +117,19 @@ jobs:
       - name: Package the demo
         shell: bash
         run: |
-          name=rtlog-demo-${{ env.RELEASE_VERSION }}-${{ matrix.target }}
+          for target in ${{ matrix.target }} ${{ matrix.also }}; do
+          name=rtlog-demo-${{ env.RELEASE_VERSION }}-$target
           ext=; [ "${{ runner.os }}" = "Windows" ] && ext=.exe
           mkdir -p "dist/$name/bin"
           for e in timing perfetto_quickstart app_trace stdout_mode; do
-            cp "target/${{ matrix.target }}/dist/examples/$e$ext" "dist/$name/bin/"
+            cp "target/$target/dist/examples/$e$ext" "dist/$name/bin/"
           done
-          cp "target/${{ matrix.target }}/dist/rtlog$ext" "dist/$name/bin/"
+          cp "target/$target/dist/rtlog$ext" "dist/$name/bin/"
           cp docs/demo.md "dist/$name/README.md"
           sed -i.bak 's#](\.\./examples)#](https://github.com/NieWil/rtlog/tree/main/examples)#; s#](performance.md#](https://github.com/NieWil/rtlog/blob/main/docs/performance.md#' "dist/$name/README.md" && rm "dist/$name/README.md.bak"
           cp scripts/demo/run.sh LICENSE-MIT LICENSE-APACHE "dist/$name/"
           chmod +x "dist/$name/run.sh"
+          done
       - name: Smoke test the demo
         shell: bash
         run: |
@@ -137,19 +149,20 @@ jobs:
       - name: Package
         shell: bash
         run: |
-          name=rtlog-${{ env.RELEASE_VERSION }}-${{ matrix.target }}
+          for target in ${{ matrix.target }} ${{ matrix.also }}; do
+          name=rtlog-${{ env.RELEASE_VERSION }}-$target
           mkdir -p "dist/$name"
-          bin=target/${{ matrix.target }}/dist/rtlog
+          bin=target/$target/dist/rtlog
           [ -f "$bin.exe" ] && bin="$bin.exe"
           cp "$bin" README.md LICENSE-MIT LICENSE-APACHE "dist/$name/"
-          cd dist
-          demo=rtlog-demo-${{ env.RELEASE_VERSION }}-${{ matrix.target }}
+          demo=rtlog-demo-${{ env.RELEASE_VERSION }}-$target
           if [ "${{ runner.os }}" = "Windows" ]; then
-            7z a "$name.zip" "$name" >/dev/null; 7z a "$demo.zip" "$demo" >/dev/null
+            (cd dist && 7z a "$name.zip" "$name" >/dev/null && 7z a "$demo.zip" "$demo" >/dev/null)
           else
-            tar czf "$name.tar.gz" "$name"; tar czf "$demo.tar.gz" "$demo"
+            (cd dist && tar czf "$name.tar.gz" "$name" && tar czf "$demo.tar.gz" "$demo")
           fi
-          ls -la
+          done
+          ls -la dist
       - name: Debian package
         if: matrix.deb
         run: |

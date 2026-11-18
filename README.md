@@ -12,7 +12,7 @@ You write `println!`-style log lines. The device writes a few binary bytes into 
 [![docs.rs](https://img.shields.io/docsrs/rtlog)](https://docs.rs/rtlog)
 ![no_std](https://img.shields.io/badge/no__std-yes-2ea44f)
 ![languages](https://img.shields.io/badge/Rust%20%C2%B7%20C%20%C2%B7%20C%2B%2B%20%C2%B7%20Zephyr-informational)
-![status](https://img.shields.io/badge/status-v0.2%20preview-orange)
+![status](https://img.shields.io/badge/status-v0.3%20preview-orange)
 ![licence](https://img.shields.io/badge/licence-MIT%20%2F%20Apache--2.0-blue)
 
 ![What you write, what goes on the wire, what you read](https://raw.githubusercontent.com/NieWil/rtlog/main/docs/images/hero.svg)
@@ -173,7 +173,7 @@ Every output format is an exporter in the decoder, so adding one costs the progr
 
 ## Status
 
-v0.2 preview. Every CI run tests Rust, C and C++ on Linux, macOS and Windows, Rust on arm64, ARMv7, RISC-V and x86 under QEMU, and the Zephyr module on an emulated Cortex-M3. Each run also includes a 2-minute soak test, Miri, and Thread and Address sanitizers. Not yet there: `derive(Log)`, the `log` / `tracing` / `defmt` bridges and per-module levels. [Roadmap →](https://github.com/NieWil/rtlog/blob/main/docs/roadmap.md)
+v0.3 preview. Every CI run tests Rust, C and C++ on Linux, macOS and Windows, Rust on arm64, ARMv7, RISC-V and x86 under QEMU, and the Zephyr module on an emulated Cortex-M3. Each run also includes a 2-minute soak test, Miri, and Thread and Address sanitizers. Not yet there: `derive(Log)`, the `log` / `tracing` / `defmt` bridges and per-module levels. [Roadmap →](https://github.com/NieWil/rtlog/blob/main/docs/roadmap.md)
 
 ## Licence
 

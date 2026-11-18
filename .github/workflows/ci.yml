@@ -179,7 +179,13 @@ jobs:
           clang++ --version
           out=target/c-e2e/clang-msvc && mkdir -p "$out"
           # The demo opens its capture with fopen, which Microsoft's headers mark as deprecated.
-          clang++ -O2 -std=c++17 -Wall -Wextra -Werror -D_CRT_SECURE_NO_WARNINGS -I c/include c/examples/demo.cpp -o "$out/demo_cpp.exe"
+          # The runner image pairs Visual Studio's C++ library with an older LLVM
+          # than that library asks for (since 2026-11: MSVC 14.52 wants Clang 22,
+          # the image has Clang 20), and the library then refuses to compile
+          # (error STL1000). _ALLOW_COMPILER_AND_STL_VERSION_MISMATCH is
+          # Microsoft's switch for that check; the build and the run below are
+          # otherwise unchanged.
+          clang++ -O2 -std=c++17 -Wall -Wextra -Werror -D_CRT_SECURE_NO_WARNINGS -D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH -I c/include c/examples/demo.cpp -o "$out/demo_cpp.exe"
           "$out/demo_cpp.exe" "$out/demo_cpp.rtlog"
           target/debug/rtlog contract --elf "$out/demo_cpp.exe" -o "$out/demo_cpp.contract.jsonl"
           target/debug/rtlog decode --contract "$out/demo_cpp.contract.jsonl" "$out/demo_cpp.rtlog" > "$out/demo_cpp.txt"

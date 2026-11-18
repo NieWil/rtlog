@@ -59,7 +59,7 @@ The same commands work on macOS (Apple Clang) and, in an MSYS2 or Git Bash shell
 | Windows | MinGW-w64 GCC; Clang for the MinGW or the MSVC ABI | `rtlog` | `QueryPerformanceCounter`, usually 100 ns | yes (fiber-local-storage callback) |
 | Zephyr, bare metal | GCC, Clang | `rtlog_sites` | set with `rtlog_set_clock` | no: call `rtlog_thread_exit()` |
 
-Microsoft's `cl.exe` cannot compile the header: it uses GNU extensions (statement expressions, `__attribute__((section))`, `__atomic` builtins). Clang for the MSVC ABI (`clang++`, `clang-cl`) accepts them and links with `link.exe` or `lld-link`; the header itself uses only the Win32 API there, no pthreads. The C examples do use pthreads, so they need MinGW-w64; the C++ example uses `std::thread` and builds with either.
+Microsoft's `cl.exe` cannot compile the header: it uses GNU extensions (statement expressions, `__attribute__((section))`, `__atomic` builtins). Clang for the MSVC ABI (`clang++`, `clang-cl`) accepts them and links with `link.exe` or `lld-link`; the header itself uses only the Win32 API there, no pthreads. The C examples do use pthreads, so they need MinGW-w64; the C++ example uses `std::thread` and builds with either. When Visual Studio's C++ library is newer than the Clang that compiles against it, the library stops the build with error STL1000; update LLVM, or define `_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH` as CI does.
 
 ## API
 
@@ -88,7 +88,7 @@ Supported argument types: `bool`, `char`, all integer types, `float`, `double`, 
 - A call site's descriptor (level, format string, file, line) goes into the `rtlog_sites` section of the binary (`rtlog` in a PE file, where two all-zero marker entries bound it). The ID written on the wire is the descriptor's index in that section, so the log path does no hashing and never reads a string.
 - `rtlog contract --elf` reads the section on the host from an ELF, Mach-O or PE binary, applying load-time relocations for position-independent executables.
 
-## Limits in v0.2
+## Limits in v0.3
 
 - GCC or Clang: Linux, macOS, Windows (MinGW-w64, or Clang for the MSVC ABI), Zephyr, bare metal. Not Microsoft's `cl.exe`.
 - Little-endian only.
