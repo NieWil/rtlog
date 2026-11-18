@@ -11,14 +11,15 @@
 use std::io::{IsTerminal, Write};
 use std::process::ExitCode;
 
-use rtlog_decode::{decode_with, otlp, syslog, Contract, Options, Output};
+use rtlog_decode::{decode_with, journald, otlp, syslog, Contract, Options, Output};
 
 const USAGE: &str = "usage:
   rtlog decode --contract <contract.jsonl> [-o <file>]
-               [--out text|json|perfetto|syslog|otlp-json]
+               [--out text|json|perfetto|syslog|otlp-json|journald]
                [--color auto|always|never] [--no-spans] [--force]
                [--start <time> | --epoch <time>] [--host <name>] [--app <name>]
                [--syslog-facility <name|0-23>] [--syslog-sd-id <name>]
+               [--journald-socket <path>]
                <stream.rtlog>
   rtlog check <contract.jsonl>
   rtlog contract --elf <binary> [-o <contract.jsonl>]
@@ -27,16 +28,34 @@ const USAGE: &str = "usage:
   --json and --perfetto are short for --out json and --out perfetto.
   Perfetto output opens in https://ui.perfetto.dev (Open trace file).
   Syslog output is RFC 5424 lines; otlp-json is OpenTelemetry log records,
-  one OTLP JSON object per line, for a collector. For both, --start is the
+  one OTLP JSON object per line, for a collector. For these, --start is the
   wall-clock time of the capture's first event and --epoch that of the
   target's time zero, as Unix seconds or 2026-11-17T09:30:00Z (without
   either the records carry no time of day); --host and --app name the
-  machine and the program.
+  machine and the program. journald output is systemd journal entries in
+  the Journal Export Format, for systemd-journal-remote; with
+  --journald-socket /run/systemd/journal/socket the entries go to the
+  running journal instead of stdout.
   `contract --elf` reads the binary that was built: ELF (Linux, firmware),
   Mach-O (macOS) or PE (Windows); `--binary` is the same option. A Rust
   program can also write its contract with rtlog::contract::write(path).
   `verify` fails if an image that ships (a flashed .bin, a stripped binary)
   still holds a format string of the contract; see docs/strip.md.";
+
+/// Give journal entries to systemd-journald on its socket; returns how many.
+#[cfg(unix)]
+fn send_to_journal(export: &str, socket: &str) -> std::io::Result<usize> {
+    journald::send(export, socket)
+}
+
+/// There is no systemd journal to send to on this system.
+#[cfg(not(unix))]
+fn send_to_journal(_export: &str, _socket: &str) -> std::io::Result<usize> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "--journald-socket needs a Unix system with systemd",
+    ))
+}
 
 /// Write to stdout; a closed pipe (`| head`) ends output quietly instead of panicking.
 fn write_stdout(s: &str) {
@@ -63,6 +82,8 @@ fn run(args: &[String]) -> Result<(), String> {
             let mut opts = Options::default();
             let mut sys = syslog::Config::default();
             let mut otel = otlp::Config::default();
+            let mut journal = journald::Config::default();
+            let mut journal_socket: Option<String> = None;
             let mut it = args[1..].iter();
             while let Some(a) = it.next() {
                 let mut value =
@@ -78,6 +99,7 @@ fn run(args: &[String]) -> Result<(), String> {
                             "perfetto" | "chrome" => Output::Perfetto,
                             "syslog" => Output::Syslog,
                             "otlp-json" => Output::OtlpJson,
+                            "journald" => Output::Journald,
                             o => return Err(format!("unknown output {o:?}\n{USAGE}")),
                         }
                     }
@@ -89,18 +111,20 @@ fn run(args: &[String]) -> Result<(), String> {
                             "{f} {v:?}: expected Unix seconds or a time like 2026-11-17T09:30:00Z"
                         ))?);
                         if f == "--epoch" {
-                            (sys.epoch_ns, otel.epoch_ns) = (t, t);
+                            (sys.epoch_ns, otel.epoch_ns, journal.epoch_ns) = (t, t, t);
                         } else {
-                            (sys.start_ns, otel.start_ns) = (t, t);
+                            (sys.start_ns, otel.start_ns, journal.start_ns) = (t, t, t);
                         }
                     }
                     "--host" => {
                         sys.hostname = value("--host")?;
                         otel.host_name = sys.hostname.clone();
+                        journal.hostname = sys.hostname.clone();
                     }
                     "--app" => {
                         sys.app_name = value("--app")?;
                         otel.service_name = sys.app_name.clone();
+                        journal.identifier = sys.app_name.clone();
                     }
                     "--syslog-facility" => {
                         let v = value("--syslog-facility")?;
@@ -109,6 +133,10 @@ fn run(args: &[String]) -> Result<(), String> {
                         ))?;
                     }
                     "--syslog-sd-id" => sys.sd_id = value("--syslog-sd-id")?,
+                    "--journald-socket" => {
+                        opts.output = Output::Journald;
+                        journal_socket = Some(value("--journald-socket")?);
+                    }
                     "--no-spans" => opts.spans = false,
                     "--force" => opts.force = true,
                     s if s.starts_with('-') => return Err(format!("unknown option {s}\n{USAGE}")),
@@ -131,12 +159,19 @@ fn run(args: &[String]) -> Result<(), String> {
             let d = match opts.output {
                 Output::Syslog => syslog::decode(&contract, &bytes, &opts, &sys),
                 Output::OtlpJson => otlp::decode(&contract, &bytes, &opts, &otel),
+                Output::Journald => journald::decode(&contract, &bytes, &opts, &journal),
                 _ => decode_with(&contract, &bytes, &opts),
             }
             .map_err(|e| format!("{path}: {e}"))?;
-            match &out_file {
-                Some(f) => std::fs::write(f, &d.text).map_err(|e| format!("{f}: {e}"))?,
-                None => {
+            let mut sent = None;
+            match (&journal_socket, &out_file) {
+                (Some(socket), _) => {
+                    let n =
+                        send_to_journal(&d.text, socket).map_err(|e| format!("{socket}: {e}"))?;
+                    sent = Some(format!(" -> {n} entries to {socket}"));
+                }
+                (None, Some(f)) => std::fs::write(f, &d.text).map_err(|e| format!("{f}: {e}"))?,
+                (None, None) => {
                     let mut o = std::io::stdout().lock();
                     // A closed pipe (`| head`) is not an error worth reporting.
                     let _ = o.write_all(d.text.as_bytes());
@@ -156,7 +191,8 @@ fn run(args: &[String]) -> Result<(), String> {
                 } else {
                     String::new()
                 },
-                out_file.map(|f| format!(" -> {f}")).unwrap_or_default()
+                sent.or(out_file.map(|f| format!(" -> {f}")))
+                    .unwrap_or_default()
             );
             match d.error {
                 Some(e) => Err(format!("{path}: stopped early: {e}")),

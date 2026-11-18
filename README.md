@@ -4,7 +4,7 @@
 
 One wire format and one decoder for Cortex-M and RISC-V firmware (bare metal or Zephyr) and for programs on Linux, macOS and Windows, in Rust, C and C++.
 
-You write `println!`-style log lines. The device writes a few binary bytes into a lock-free ring: no formatting, no allocation, no lock. You read text, JSON or a [Perfetto](https://ui.perfetto.dev) timeline on the host, or send the records to syslog or OpenTelemetry.
+You write `println!`-style log lines. The device writes a few binary bytes into a lock-free ring: no formatting, no allocation, no lock. You read text, JSON or a [Perfetto](https://ui.perfetto.dev) timeline on the host, or send the records to syslog, the systemd journal or OpenTelemetry.
 
 [![ci](https://github.com/NieWil/rtlog/actions/workflows/ci.yml/badge.svg)](https://github.com/NieWil/rtlog/actions/workflows/ci.yml)
 [![coverage](https://codecov.io/gh/NieWil/rtlog/graph/badge.svg)](https://codecov.io/gh/NieWil/rtlog)
@@ -134,7 +134,8 @@ Every output format is an exporter in the decoder, so adding one costs the progr
 | Text, JSON lines, Perfetto timeline | Built (`rtlog decode --out text\|json\|perfetto`) |
 | syslog (RFC 5424 lines) | Built (`rtlog decode --out syslog`, [guide](docs/syslog.md)) |
 | OpenTelemetry logs (OTLP JSON lines) | Built (`rtlog decode --out otlp-json`, [guide](docs/opentelemetry.md)) |
-| Sending to a syslog daemon or over OTLP/HTTP, journald, spans as OpenTelemetry traces | Planned ([roadmap, section 10](docs/roadmap.md#10-ecosystem-bridges)) |
+| systemd journal (entries to a file, or sent to `systemd-journald`) | Built (`rtlog decode --out journald`, `--journald-socket`, [guide](docs/journald.md)) |
+| Sending to a syslog daemon or over OTLP/HTTP, spans as OpenTelemetry traces | Planned ([roadmap, section 10](docs/roadmap.md#10-ecosystem-bridges)) |
 
 ## Guides
 
@@ -146,6 +147,7 @@ Every output format is an exporter in the decoder, so adding one costs the progr
 | [C and C++](docs/c-cpp.md) | Header-only producer for Linux, macOS, Windows and bare metal: build, capture, decode |
 | [Zephyr](docs/zephyr.md) | Module, Kconfig, transports |
 | [Send logs to OpenTelemetry](docs/opentelemetry.md) | OTLP JSON log records from a capture, for an OpenTelemetry Collector |
+| [Send logs to the systemd journal](docs/journald.md) | Journal entries from a capture: into the running journal, or as a file for `systemd-journal-remote` |
 | [Send logs to syslog](docs/syslog.md) | RFC 5424 lines from a capture, for rsyslog, syslog-ng or a log collector |
 | [Ship without the format strings](docs/strip.md) | Stripped builds: a smaller image with no log text in it, and `rtlog verify` as a release gate |
 | [Configuration and CLI](docs/reference.md) | Levels, environment variables, features, every `rtlog` command and option, the JSON output |

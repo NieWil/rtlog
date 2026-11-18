@@ -273,6 +273,7 @@ pub fn decode(
         &opts,
         &crate::syslog::Config::default(),
         cfg,
+        &crate::journald::Config::default(),
     )
 }
 
