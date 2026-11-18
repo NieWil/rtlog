@@ -88,7 +88,7 @@ Supported argument types: `bool`, `char`, all integer types, `float`, `double`, 
 - A call site's descriptor (level, format string, file, line) goes into the `rtlog_sites` section of the binary (`rtlog` in a PE file, where two all-zero marker entries bound it). The ID written on the wire is the descriptor's index in that section, so the log path does no hashing and never reads a string.
 - `rtlog contract --elf` reads the section on the host from an ELF, Mach-O or PE binary, applying load-time relocations for position-independent executables.
 
-## Limits in v0.2
+## Limits in v0.3
 
 - GCC or Clang: Linux, macOS, Windows (MinGW-w64, or Clang for the MSVC ABI), Zephyr, bare metal. Not Microsoft's `cl.exe`.
 - Little-endian only.

@@ -67,7 +67,7 @@ Tests crash real child processes in each of these ways, including with a drain b
 
 ## Windows
 
-Since 0.2.6. `rtlog::crash::install(dir)` and `rtlog_crash_install(dir)` register an unhandled-exception filter (`SetUnhandledExceptionFilter`) and a `SIGABRT` handler in the C runtime; the Rust panic hook is the same as on Unix. A dump looks like this:
+Since 0.3.0. `rtlog::crash::install(dir)` and `rtlog_crash_install(dir)` register an unhandled-exception filter (`SetUnhandledExceptionFilter`) and a `SIGABRT` handler in the C runtime; the Rust panic hook is the same as on Unix. A dump looks like this:
 
 ```text
 0.000794 [main] WARN  about to fail mode=segv
