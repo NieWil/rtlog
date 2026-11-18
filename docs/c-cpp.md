@@ -59,7 +59,7 @@ The same commands work on macOS (Apple Clang) and, in an MSYS2 or Git Bash shell
 | Windows | MinGW-w64 GCC; Clang for the MinGW or the MSVC ABI | `rtlog` | `QueryPerformanceCounter`, usually 100 ns | yes (fiber-local-storage callback) |
 | Zephyr, bare metal | GCC, Clang | `rtlog_sites` | set with `rtlog_set_clock` | no: call `rtlog_thread_exit()` |
 
-Microsoft's `cl.exe` cannot compile the header: it uses GNU extensions (statement expressions, `__attribute__((section))`, `__atomic` builtins). Clang for the MSVC ABI (`clang++`, `clang-cl`) accepts them and links with `link.exe` or `lld-link`; the header itself uses only the Win32 API there, no pthreads. The C examples do use pthreads, so they need MinGW-w64; the C++ example uses `std::thread` and builds with either.
+Microsoft's `cl.exe` cannot compile the header: it uses GNU extensions (statement expressions, `__attribute__((section))`, `__atomic` builtins). Clang for the MSVC ABI (`clang++`, `clang-cl`) accepts them and links with `link.exe` or `lld-link`; the header itself uses only the Win32 API there, no pthreads. The C examples do use pthreads, so they need MinGW-w64; the C++ example uses `std::thread` and builds with either. When Visual Studio's C++ library is newer than the Clang that compiles against it, the library stops the build with error STL1000; update LLVM, or define `_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH` as CI does.
 
 ## API
 
