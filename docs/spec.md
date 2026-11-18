@@ -308,7 +308,7 @@ In debug builds a developer sees text on stdout with no tooling; in any build a 
 
 **Debug stdout** (`rtlog_decode::stdout::init()`)
 
-- The host decoder runs in the drain thread behind a text transport; frames are decoded there and printed, so `cargo run` reads like `env_logger`. The level comes from `RTLOG` (`trace` … `error`, `off`); colours when the output is a terminal and `NO_COLOR` is unset; stdout or stderr.
+- The host decoder runs in the drain thread behind a text transport; frames are decoded there and printed, so `cargo run` reads like `env_logger`. The level comes from `RTLOG` (`trace` … `error`, `off`); colours when the output is a terminal and `NO_COLOR` is unset; stdout or stderr. A line shows the time, the context and the level before the message; `RTLOG_FIELDS` or `Config::fields` chooses otherwise among time, context, level, module, file and line ([reference](reference.md#choose-what-a-text-line-shows)), as `--fields` does for `rtlog decode`.
 - Only the drain formats; call sites keep the binary path, so timings measured with it on are representative.
 - The contract comes from the running binary's own descriptors.
 

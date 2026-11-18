@@ -1,6 +1,12 @@
 //! Read logs as text while keeping deferred, binary log calls:
 //!
 //! `RTLOG=debug cargo run -p rtlog-examples --example stdout_mode`
+//!
+//! A line shows the time, the thread and the level before the message. To
+//! choose otherwise (advanced), list the fields in `RTLOG_FIELDS`, from
+//! `time`, `ctx`, `level`, `module`, `file`, `line`:
+//!
+//! `RTLOG_FIELDS=level,module,line cargo run -p rtlog-examples --example stdout_mode`
 
 fn main() {
     let _log = rtlog_decode::stdout::init();

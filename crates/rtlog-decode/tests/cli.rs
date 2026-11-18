@@ -962,3 +962,37 @@ fn cli_sends_journal_entries_to_a_socket() {
     ));
     assert!(err.contains("journal.socket: "), "{err}");
 }
+
+#[test]
+fn fields_chooses_what_a_text_line_shows() {
+    let dir = Scratch::new("fields");
+    let (contract, stream) = dir.contract_and_stream();
+
+    let stdout = succeeded(&decode(
+        &contract,
+        &stream,
+        &["--fields", "level,module,line", "--no-spans"],
+    ));
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines.len(), 2, "{stdout}");
+    assert!(
+        lines[0].starts_with("INFO  cli ") && lines[0].ends_with(":   cli speed=1200 ok=true"),
+        "{stdout}"
+    );
+    assert!(lines[0].contains("cli.rs:"), "{stdout}");
+    assert!(lines[1].starts_with("WARN  cli "), "{stdout}");
+
+    let stdout = succeeded(&decode(
+        &contract,
+        &stream,
+        &["--fields", "none", "--no-spans"],
+    ));
+    // The record written inside the span keeps its indentation.
+    assert_eq!(stdout, "  cli speed=1200 ok=true\ncli temp=81\n");
+
+    let err = failed(&decode(&contract, &stream, &["--fields", "level,thread"]));
+    assert!(
+        err.contains("--fields: unknown field \"thread\"; choose from time, ctx, level,"),
+        "{err}"
+    );
+}

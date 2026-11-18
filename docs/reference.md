@@ -25,6 +25,7 @@ C and C++: `rtlog_set_level(RTLOG_LEVEL_WARN)` with `RTLOG_LEVEL_TRACE` … `RTL
 | --- | --- | --- |
 | `RTLOG_LEVEL` | when **building** your program | Lowest level compiled in (`trace` … `error`, `off`). |
 | `RTLOG` | at `stdout::init()` | Runtime level for stdout mode. Default `info`. |
+| `RTLOG_FIELDS` | at `stdout::init()` | What a line shows before the message: see [Choose what a text line shows](#choose-what-a-text-line-shows). |
 | `RTLOG_CLOCK=instant` | first log call | Use `std::time::Instant` (nanoseconds) instead of the CPU counter (TSC ÷ 2 on x86-64, `CNTVCT_EL0` on aarch64). For machines whose counter is unreliable. |
 | `NO_COLOR` | stdout mode, `rtlog decode` | No colours, even on a terminal. |
 | `RTLOG_BOARD` | `timing` example, demo `run.sh` | Board name in the timing report. |
@@ -60,6 +61,7 @@ rtlog decode --contract <contract.jsonl> [options] <stream.rtlog>
 | `-o <file>`, `--output <file>` | Write to a file instead of stdout. |
 | `--color auto\|always\|never` | Colours in text output. `auto`: on a terminal unless `NO_COLOR` is set, never with `-o`. |
 | `--no-spans` | Leave span open/close records out. |
+| `--fields <list>` | What a text line shows before the message: see [Choose what a text line shows](#choose-what-a-text-line-shows). |
 | `--force` | Decode even if the stream's contract hash does not match the contract. |
 | `--start <time>` | With `--out syslog`, `otlp-json` or `journald`: the wall-clock time of the capture's first event, as Unix seconds or an RFC 3339 time (`2026-11-17T09:30:00Z`). |
 | `--epoch <time>` | With `--out syslog`, `otlp-json` or `journald`: the wall-clock time of the target's time zero. Takes precedence over `--start`. With neither, the records carry no time of day. |
@@ -93,6 +95,47 @@ rtlog verify --contract <contract.jsonl> <image>...
 ```
 
 Checks an image that ships (a flashed `.bin`, an executable after `objcopy`) against the contract of its build: exits with an error if the image contains a format string or span name of the contract, and names each one found. Strings shorter than 6 bytes are not searched for. Use it as a release gate for [stripped builds](strip.md).
+
+## Choose what a text line shows
+
+You do not need this to start: a text line shows the time, the thread and the level, then the message.
+
+```text
+0.000412 [motor] INFO  pid out=0.42 err=-3
+```
+
+To show something else, give a list of fields. The order on the line is fixed; the list only says which fields appear.
+
+| Field | Shows | In the default line |
+| --- | --- | --- |
+| `time` | Seconds since the first event, to the microsecond | yes |
+| `ctx` | The name of the thread or task, in brackets | yes |
+| `level` | The level | yes |
+| `module` | The module path of the call (Rust) or its function (C) | no |
+| `file` | The source file of the call | no |
+| `line` | The source file and line of the call | no |
+
+`default` stands for `time,ctx,level`, `all` for every field and `none` for the message alone.
+
+| List | Line |
+| --- | --- |
+| `default` | `0.000412 [motor] INFO  pid out=0.42 err=-3` |
+| `default,module` | `0.000412 [motor] INFO  app::motor pid out=0.42 err=-3` |
+| `default,line` | `0.000412 [motor] INFO  src/motor.rs:42: pid out=0.42 err=-3` |
+| `all` | `0.000412 [motor] INFO  app::motor src/motor.rs:42: pid out=0.42 err=-3` |
+| `level,line` | `INFO  src/motor.rs:42: pid out=0.42 err=-3` |
+| `none` | `pid out=0.42 err=-3` |
+
+Where to give the list:
+
+| Where | How |
+| --- | --- |
+| `rtlog decode` | `--fields default,line` |
+| Stdout mode, without rebuilding | `RTLOG_FIELDS=default,line cargo run` |
+| Stdout mode, in the program | `stdout::init_with(Config { fields: Some(Fields::parse("default,line").unwrap()), ..Config::default() })` |
+| `rtlog_decode::decode_with` | `Options { fields: Fields::ALL, ..Options::default() }` |
+
+The fields cost the program nothing: module, file and line come from the contract on the host, and the log call writes the same bytes whatever is shown. The choice applies to text output only; JSON lines, syslog, journald and OpenTelemetry always carry module, file and line. `rtlog decode` refuses a name it does not know; the stdout mode falls back to the default line, so a typing mistake in `RTLOG_FIELDS` cannot stop the program.
 
 ## JSON lines output
 
