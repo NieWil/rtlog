@@ -17,6 +17,7 @@ const USAGE: &str = "usage:
   rtlog decode --contract <contract.jsonl> [-o <file>]
                [--out text|json|perfetto|syslog|otlp-json]
                [--color auto|always|never] [--no-spans] [--force]
+               [--fields <list>]
                [--start <time> | --epoch <time>] [--host <name>] [--app <name>]
                [--syslog-facility <name|0-23>] [--syslog-sd-id <name>]
                <stream.rtlog>
@@ -25,6 +26,9 @@ const USAGE: &str = "usage:
   rtlog verify --contract <contract.jsonl> <image>...
 
   --json and --perfetto are short for --out json and --out perfetto.
+  --fields chooses what a text line shows before the message, from time,
+  ctx, level, module, file, line: --fields default,module,line adds the
+  module and file:line to the usual line; all and none are accepted.
   Perfetto output opens in https://ui.perfetto.dev (Open trace file).
   Syslog output is RFC 5424 lines; otlp-json is OpenTelemetry log records,
   one OTLP JSON object per line, for a collector. For both, --start is the
@@ -110,6 +114,14 @@ fn run(args: &[String]) -> Result<(), String> {
                     }
                     "--syslog-sd-id" => sys.sd_id = value("--syslog-sd-id")?,
                     "--no-spans" => opts.spans = false,
+                    "--fields" => {
+                        let v = value("--fields")?;
+                        opts.fields = rtlog_decode::Fields::parse(&v).map_err(|name| {
+                            format!(
+                                "--fields: unknown field {name:?}; choose from time, ctx, level, module, file, line, default, all, none"
+                            )
+                        })?;
+                    }
                     "--force" => opts.force = true,
                     s if s.starts_with('-') => return Err(format!("unknown option {s}\n{USAGE}")),
                     s => stream = Some(s.to_owned()),

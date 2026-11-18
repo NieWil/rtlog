@@ -62,6 +62,96 @@ pub enum Output {
     OtlpJson,
 }
 
+/// What a text line shows before the message, for [`Options::fields`] and
+/// [`stdout::Config::fields`]. The order on the line is fixed:
+///
+/// ```text
+/// 0.000412 [motor] INFO  app::motor src/main.rs:42: pid out=0.42 err=-3
+/// time     ctx     level module     file    :line   message
+/// ```
+///
+/// The default is time, context and level. Parse a list with
+/// [`Fields::parse`]: `"level,module"`, `"default,line"`, `"all"`, `"none"`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Fields {
+    /// Seconds since the first event, to the microsecond.
+    pub time: bool,
+    /// The name of the thread or task, in brackets.
+    pub ctx: bool,
+    /// The level.
+    pub level: bool,
+    /// The module path of the call site (Rust) or its function (C).
+    pub module: bool,
+    /// The source file of the call site.
+    pub file: bool,
+    /// The source line, after the file; shows the file too.
+    pub line: bool,
+}
+
+impl Fields {
+    /// Time, context and level: what a line shows unless told otherwise.
+    pub const DEFAULT: Fields = Fields {
+        time: true,
+        ctx: true,
+        level: true,
+        module: false,
+        file: false,
+        line: false,
+    };
+    /// Only the message.
+    pub const NONE: Fields = Fields {
+        time: false,
+        ctx: false,
+        level: false,
+        module: false,
+        file: false,
+        line: false,
+    };
+    /// Every field.
+    pub const ALL: Fields = Fields {
+        time: true,
+        ctx: true,
+        level: true,
+        module: true,
+        file: true,
+        line: true,
+    };
+
+    /// Parse a comma-separated list of `time`, `ctx`, `level`, `module`,
+    /// `file`, `line`, plus `default` (time, ctx, level), `all` and `none`.
+    /// The line shows exactly what the list names: `"default,module"` adds
+    /// the module to the usual line, `"level"` shows the level alone.
+    /// Returns the name that is not a field on error.
+    pub fn parse(list: &str) -> Result<Fields, String> {
+        let mut f = Fields::NONE;
+        for name in list.split(',').map(str::trim).filter(|n| !n.is_empty()) {
+            match name {
+                "time" => f.time = true,
+                "ctx" => f.ctx = true,
+                "level" => f.level = true,
+                "module" => f.module = true,
+                "file" => f.file = true,
+                "line" => f.line = true,
+                "default" => {
+                    f.time = true;
+                    f.ctx = true;
+                    f.level = true;
+                }
+                "all" => f = Fields::ALL,
+                "none" => {}
+                other => return Err(other.to_owned()),
+            }
+        }
+        Ok(f)
+    }
+}
+
+impl Default for Fields {
+    fn default() -> Self {
+        Fields::DEFAULT
+    }
+}
+
 /// Decoding options.
 #[derive(Clone, Copy, Debug)]
 pub struct Options {
@@ -73,6 +163,8 @@ pub struct Options {
     pub color: bool,
     /// Show span open/close lines in text output.
     pub spans: bool,
+    /// What a text line shows before the message; see [`Fields`].
+    pub fields: Fields,
 }
 
 impl Default for Options {
@@ -82,6 +174,7 @@ impl Default for Options {
             force: false,
             color: false,
             spans: true,
+            fields: Fields::DEFAULT,
         }
     }
 }
@@ -213,6 +306,7 @@ fn human_ns(ns: u64) -> String {
 pub(crate) struct TextRenderer {
     paint: Painter,
     spans: bool,
+    pub(crate) fields: Fields,
     mark: &'static str,
     t0: Option<u64>,
     pub(crate) names: HashMap<u32, String>,
@@ -226,6 +320,7 @@ impl TextRenderer {
         TextRenderer {
             paint: Painter { on: color },
             spans,
+            fields: Fields::DEFAULT,
             mark: if mismatched { "?" } else { "" },
             t0,
             names: HashMap::new(),
@@ -250,18 +345,52 @@ impl TextRenderer {
         self.labelled(ts_ns, &name, anchor)
     }
 
-    /// `<seconds> [<label>]`; see [`Self::prefix_with`] for `anchor`.
+    /// `<seconds> [<label>] `, as far as the fields ask; see
+    /// [`Self::prefix_with`] for `anchor`.
     fn labelled(&mut self, ts_ns: u64, label: &str, anchor: bool) -> String {
         let t0 = match self.t0 {
             Some(t) => t,
             None if anchor => *self.t0.get_or_insert(ts_ns),
             None => ts_ns,
         };
-        format!(
-            "{} {}",
-            self.paint.paint(DIM, &stamp(ts_ns, t0)),
-            self.paint.paint(CYAN, &format!("[{label}]"))
-        )
+        let mut out = String::new();
+        if self.fields.time {
+            out.push_str(&self.paint.paint(DIM, &stamp(ts_ns, t0)));
+            out.push(' ');
+        }
+        if self.fields.ctx {
+            out.push_str(&self.paint.paint(CYAN, &format!("[{label}]")));
+            out.push(' ');
+        }
+        out
+    }
+
+    /// `<level> `, padded to five letters, when levels are shown.
+    fn tag(&self, color: &str, tag: &str) -> String {
+        if self.fields.level {
+            format!("{} ", self.paint.paint(color, tag))
+        } else {
+            String::new()
+        }
+    }
+
+    /// `<module> <file>:<line>: ` for a call site, as far as asked for.
+    fn origin(&self, site: &SiteInfo) -> String {
+        let mut out = String::new();
+        if self.fields.module && !site.module.is_empty() {
+            out.push_str(&site.module);
+            out.push(' ');
+        }
+        if self.fields.line {
+            out.push_str(&format!("{}:{}: ", site.file, site.line));
+        } else if self.fields.file {
+            out.push_str(&format!("{}: ", site.file));
+        }
+        if out.is_empty() {
+            out
+        } else {
+            self.paint.paint(DIM, &out)
+        }
     }
 
     /// The text line for `item`, if it has one.
@@ -272,9 +401,10 @@ impl TextRenderer {
                 let d = self.depth.get(&r.ctx).copied().unwrap_or(0);
                 let level = format!("{:<5}", r.site.level.as_str().to_ascii_uppercase());
                 format!(
-                    "{} {} {}{}{}",
+                    "{}{}{}{}{}{}",
                     self.prefix(r.ts_ns, r.ctx),
-                    p.paint(level_color(r.site.level), &level),
+                    self.tag(level_color(r.site.level), &level),
+                    self.origin(r.site),
                     "  ".repeat(d),
                     self.mark,
                     render::format(&r.site.fmt, &r.args),
@@ -296,8 +426,8 @@ impl TextRenderer {
                     return None;
                 }
                 format!(
-                    "{prefix} {} {indent}{}",
-                    p.paint(MAGENTA, "SPAN "),
+                    "{prefix}{}{indent}{}",
+                    self.tag(MAGENTA, "SPAN "),
                     p.paint(MAGENTA, &format!("▶ {name}"))
                 )
             }
@@ -310,9 +440,9 @@ impl TextRenderer {
                     return None;
                 }
                 format!(
-                    "{} {} {indent}{} {}",
+                    "{}{}{indent}{} {}",
                     self.prefix(*ts_ns, *ctx),
-                    p.paint(MAGENTA, "SPAN "),
+                    self.tag(MAGENTA, "SPAN "),
                     p.paint(MAGENTA, &format!("◀ {name}")),
                     p.paint(DIM, &human_ns(ts_ns.saturating_sub(start))),
                 )
@@ -323,24 +453,24 @@ impl TextRenderer {
                 reason,
                 skipped,
             } => format!(
-                "{} {} {}",
+                "{}{}{}",
                 self.labelled(*ts_ns, "stream", false),
-                p.paint(RED_BOLD, "GAP  "),
+                self.tag(RED_BOLD, "GAP  "),
                 p.paint(
                     RED_BOLD,
                     &format!("bad data at byte {offset} ({reason}); {skipped} bytes skipped, resumed at the next resync frame")
                 ),
             ),
             Item::Dropped { ts_ns, ctx, count } => format!(
-                "{} {} {}",
+                "{}{}{}",
                 self.prefix_with(*ts_ns, *ctx, false),
-                p.paint(RED_BOLD, "DROP "),
+                self.tag(RED_BOLD, "DROP "),
                 p.paint(RED_BOLD, &format!("{count} frames dropped")),
             ),
             Item::Crash { ts_ns, ctx, crash } => format!(
-                "{} {} {}",
+                "{}{}{}",
                 self.prefix(*ts_ns, *ctx),
-                p.paint(RED_BOLD, if crash.kind == 3 { "SNAP " } else { "CRASH" }),
+                self.tag(RED_BOLD, if crash.kind == 3 { "SNAP " } else { "CRASH" }),
                 p.paint(RED_BOLD, &crash.describe()),
             ),
         })
@@ -613,6 +743,7 @@ pub(crate) fn decode_inner(
         }
         Output::Text => {
             let mut r = TextRenderer::new(opts.color, opts.spans, mismatched, Some(t0));
+            r.fields = opts.fields;
             r.names = names.clone();
             for item in &items {
                 if let Some(line) = r.render(item) {
@@ -694,6 +825,104 @@ mod tests {
             lines[0]
         );
         assert!(lines[1].ends_with("[ctx0] INFO  x=5"), "{}", lines[1]);
+    }
+
+    #[test]
+    fn fields_parse_lists_and_refuse_unknown_names() {
+        assert_eq!(Fields::parse("default"), Ok(Fields::DEFAULT));
+        assert_eq!(Fields::parse("time, ctx ,level"), Ok(Fields::DEFAULT));
+        assert_eq!(Fields::parse("all"), Ok(Fields::ALL));
+        assert_eq!(Fields::parse("none"), Ok(Fields::NONE));
+        assert_eq!(Fields::parse(""), Ok(Fields::NONE));
+        assert_eq!(
+            Fields::parse("default,module,line"),
+            Ok(Fields {
+                module: true,
+                line: true,
+                ..Fields::DEFAULT
+            })
+        );
+        assert_eq!(
+            Fields::parse("level,file"),
+            Ok(Fields {
+                level: true,
+                file: true,
+                ..Fields::NONE
+            })
+        );
+        assert_eq!(Fields::parse("time,thread"), Err("thread".to_owned()));
+        assert_eq!(Fields::default(), Fields::DEFAULT);
+    }
+
+    /// The record line of the two-frame stream, shown with `fields`.
+    fn line_with(fields: &str, color: bool) -> String {
+        let c = Contract::from_jsonl(SITE).unwrap();
+        let bytes = stream_with_unknown_site(&c);
+        let opts = Options {
+            fields: Fields::parse(fields).unwrap(),
+            color,
+            ..Options::default()
+        };
+        let text = decode_with(&c, &bytes, &opts).unwrap().text;
+        text.lines().nth(1).unwrap().to_owned()
+    }
+
+    #[test]
+    fn a_line_shows_the_fields_asked_for_in_a_fixed_order() {
+        assert_eq!(line_with("default", false), "0.000000 [ctx0] INFO  x=5");
+        assert_eq!(
+            line_with("all", false),
+            "0.000000 [ctx0] INFO  m f.rs:1: x=5"
+        );
+        assert_eq!(
+            line_with("line,module,default", false),
+            line_with("all", false)
+        );
+        assert_eq!(
+            line_with("default,module", false),
+            "0.000000 [ctx0] INFO  m x=5"
+        );
+        assert_eq!(
+            line_with("default,file", false),
+            "0.000000 [ctx0] INFO  f.rs: x=5"
+        );
+        assert_eq!(line_with("level,line", false), "INFO  f.rs:1: x=5");
+        assert_eq!(line_with("time", false), "0.000000 x=5");
+        assert_eq!(line_with("ctx", false), "[ctx0] x=5");
+        assert_eq!(line_with("none", false), "x=5");
+        // The origin is dimmed as one piece.
+        assert_eq!(
+            line_with("module,line", true),
+            format!("{DIM}m f.rs:1: {RESET}x=5")
+        );
+    }
+
+    #[test]
+    fn the_fields_apply_to_every_kind_of_line() {
+        let c = Contract::from_jsonl(SITE).unwrap();
+        let bytes = stream_with_unknown_site(&c);
+        let opts = Options {
+            fields: Fields::NONE,
+            ..Options::default()
+        };
+        let text = decode_with(&c, &bytes, &opts).unwrap().text;
+        assert!(text.starts_with("bad data at byte 17 "), "{text}");
+        let mut r = TextRenderer::new(false, true, false, Some(0));
+        r.fields = Fields::parse("level").unwrap();
+        let open = Item::SpanOpen {
+            ts_ns: 0,
+            ctx: 1,
+            id: 5,
+            parent: 0,
+            name: "work",
+        };
+        assert_eq!(r.render(&open).unwrap(), "SPAN  ▶ work");
+        let dropped = Item::Dropped {
+            ts_ns: 0,
+            ctx: 1,
+            count: 2,
+        };
+        assert_eq!(r.render(&dropped).unwrap(), "DROP  2 frames dropped");
     }
 
     #[test]

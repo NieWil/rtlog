@@ -45,6 +45,12 @@ impl<W: Write> TextTransport<W> {
         }
     }
 
+    /// Show these fields before each message instead of the default ones.
+    pub fn fields(mut self, fields: crate::Fields) -> Self {
+        self.renderer.fields = fields;
+        self
+    }
+
     /// The writer.
     pub fn get_ref(&self) -> &W {
         &self.out
@@ -119,6 +125,10 @@ pub struct Config {
     pub color: Option<bool>,
     /// How often the drain thread prints.
     pub period: Duration,
+    /// What a line shows before the message; `None` reads `RTLOG_FIELDS`
+    /// (see [`Fields::parse`](crate::Fields::parse)), defaulting to time,
+    /// context and level.
+    pub fields: Option<crate::Fields>,
 }
 
 impl Default for Config {
@@ -128,6 +138,7 @@ impl Default for Config {
             level: None,
             color: None,
             period: Duration::from_millis(5),
+            fields: None,
         }
     }
 }
@@ -208,7 +219,15 @@ pub fn init_with(cfg: Config) -> Guard {
         .color
         .unwrap_or(tty && std::env::var_os("NO_COLOR").is_none());
     let contract = own_contract();
-    let transport = TextTransport::new(contract, out, color);
+    // A name RTLOG_FIELDS does not know must not stop the program being
+    // observed: the default line is printed.
+    let fields = cfg.fields.unwrap_or_else(|| {
+        std::env::var("RTLOG_FIELDS")
+            .ok()
+            .and_then(|list| crate::Fields::parse(&list).ok())
+            .unwrap_or_default()
+    });
+    let transport = TextTransport::new(contract, out, color).fields(fields);
     Guard {
         handle: Some(rtlog::spawn_drain(transport, cfg.period)),
     }

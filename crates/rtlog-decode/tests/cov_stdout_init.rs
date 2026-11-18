@@ -35,6 +35,10 @@ fn stdout_child() {
             color: Some(false),
             ..Config::default()
         }),
+        "fields" => init_with(Config {
+            fields: Some(rtlog_decode::Fields::parse("level,module").unwrap()),
+            ..Config::default()
+        }),
         m => panic!("unknown child mode {m}"),
     };
     rtlog::trace!("probe {}", "trace");
@@ -68,6 +72,7 @@ fn child_cmd(mode: &str) -> Command {
     cmd.args(["--exact", "stdout_child", "--nocapture", "--test-threads=1"])
         .env(CHILD_ENV, mode)
         .env_remove("RTLOG")
+        .env_remove("RTLOG_FIELDS")
         .env_remove("NO_COLOR");
     cmd
 }
@@ -237,4 +242,43 @@ fn init_colours_a_terminal_unless_no_color_is_set() {
     let text = run_on_terminal(&mut child_cmd("no_color"));
     assert_eq!(probes(&text), ["info", "warn", "error"], "{text:?}");
     assert!(!text.contains('\x1b'), "Config::color wins: {text:?}");
+}
+
+#[test]
+fn rtlog_fields_chooses_what_a_line_shows() {
+    // The warn line: the first line the child prints follows the test
+    // harness's own "test stdout_child ... " on the same line.
+    let out = run(child_cmd("init").env("RTLOG_FIELDS", "level,line"));
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let warn = stdout.lines().find(|l| l.ends_with("probe warn")).unwrap();
+    let rest = warn
+        .strip_prefix("WARN  ")
+        .and_then(|l| l.strip_suffix(": probe warn"))
+        .unwrap_or_else(|| panic!("{warn}"));
+    let (file, line) = rest.rsplit_once(':').unwrap();
+    assert!(
+        file.ends_with("cov_stdout_init.rs") && line.parse::<u32>().is_ok(),
+        "{warn}"
+    );
+
+    let out = run(child_cmd("init").env("RTLOG_FIELDS", "none"));
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(stdout.lines().any(|l| l == "probe warn"), "{stdout}");
+
+    // A name it does not know: the default line, and the program runs on.
+    let out = run(child_cmd("init").env("RTLOG_FIELDS", "level,colour"));
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(stdout.contains("] WARN  probe warn"), "{stdout}");
+}
+
+#[test]
+fn config_fields_override_rtlog_fields() {
+    let out = run(child_cmd("fields").env("RTLOG_FIELDS", "all"));
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l == "WARN  cov_stdout_init probe warn"),
+        "{stdout}"
+    );
 }
