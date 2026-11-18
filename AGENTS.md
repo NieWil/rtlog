@@ -52,6 +52,7 @@ For a change to `crates/`, `c/`, the wire format, the log macros or the docs, al
 ## Writing docs and changelog
 
 - Update `README.md` or the guide in `docs/` that covers the change, and add a line to `CHANGELOG.md` under `## Unreleased`.
+- Links from `README.md` into the repository are absolute (`https://github.com/NieWil/rtlog/blob/main/...`): the README is also the page of both crates on crates.io, where a relative link is dead. `scripts/spec_check.py` checks them. Links inside `docs/` stay relative.
 - `docs/spec.md` describes only what is built. Plans go in `docs/roadmap.md`; a deliberate deviation goes in `docs/implementation.md`.
 - Plain, concrete sentences. Numbers with their unit and the conditions they were measured under (CPU, clock, build profile). No marketing words ("blazing", "seamless", "robust").
 - Every public Rust item has a doc comment (CI fails otherwise).

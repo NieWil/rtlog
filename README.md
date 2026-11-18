@@ -15,13 +15,13 @@ You write `println!`-style log lines. The device writes a few binary bytes into 
 ![status](https://img.shields.io/badge/status-v0.2%20preview-orange)
 ![licence](https://img.shields.io/badge/licence-MIT%20%2F%20Apache--2.0-blue)
 
-![What you write, what goes on the wire, what you read](docs/images/hero.svg)
+![What you write, what goes on the wire, what you read](https://raw.githubusercontent.com/NieWil/rtlog/main/docs/images/hero.svg)
 
 ## Why
 
-- **Cheap on the device.** A log call takes 36 cycles (11 ns) on x86-64 and 46 on arm64, 6–8× less than formatting the line. On Cortex-M4F, 10 messages take 3.3 KB of flash against 18.3 KB with `core::fmt`, and 0.7 KB less once the [format strings are stripped](docs/strip.md) from the image. [Numbers →](docs/performance.md)
+- **Cheap on the device.** A log call takes 36 cycles (11 ns) on x86-64 and 46 on arm64, 6–8× less than formatting the line. On Cortex-M4F, 10 messages take 3.3 KB of flash against 18.3 KB with `core::fmt`, and 0.7 KB less once the [format strings are stripped](https://github.com/NieWil/rtlog/blob/main/docs/strip.md) from the image. [Numbers →](https://github.com/NieWil/rtlog/blob/main/docs/performance.md)
 - **Never in the way.** Each thread or task owns its ring. A full ring drops and counts; it never blocks an ISR or a control loop.
-- **More than text.** Spans, typed fields and per-thread timelines export straight to Perfetto. [See a real app traced →](docs/use-cases/perfetto.md)
+- **More than text.** Spans, typed fields and per-thread timelines export straight to Perfetto. [See a real app traced →](https://github.com/NieWil/rtlog/blob/main/docs/use-cases/perfetto.md)
 - **One format everywhere.** Rust (`no_std` and `std`), C, C++ and Zephyr all write the same stream and use the same decoder.
 - **Scales with the machine.** A 1 KiB ring on a microcontroller; one ring per thread on a server, so cores do not contend for a log lock.
 
@@ -35,7 +35,7 @@ You write `println!`-style log lines. The device writes a few binary bytes into 
 | macOS | Rust, C, C++ | Runs the tests; C and C++ end to end with Apple Clang |
 | Windows | Rust, C, C++ (MinGW-w64, or Clang for the MSVC ABI) | Runs the tests; C and C++ end to end |
 
-Any thread count works on the hosted systems: each thread gets its own ring on its first log call, and one drain thread serves them all. [Platform details →](docs/reference.md#cargo-features-and-platforms)
+Any thread count works on the hosted systems: each thread gets its own ring on its first log call, and one drain thread serves them all. [Platform details →](https://github.com/NieWil/rtlog/blob/main/docs/reference.md#cargo-features-and-platforms)
 
 ## Try it
 
@@ -83,7 +83,7 @@ let _log = rtlog_decode::stdout::init();
 rtlog::crash::install("crashes/")?;
 ```
 
-Spans give each request or control-loop step a slice in [Perfetto](docs/use-cases/perfetto.md):
+Spans give each request or control-loop step a slice in [Perfetto](https://github.com/NieWil/rtlog/blob/main/docs/use-cases/perfetto.md):
 
 ```rust
 fn handle(req: &Request) {
@@ -102,21 +102,21 @@ cargo run --release -p rtlog-examples --example perfetto_quickstart
 
 | Example | Shows |
 | --- | --- |
-| [`basic`](examples/basic.rs) | The flow above with several threads: drain to a file, contract, decode |
-| [`perfetto_quickstart`](examples/perfetto_quickstart.rs) | Threads, spans and counters to a Perfetto trace in about 60 lines |
-| [`app_trace`](examples/app_trace.rs) | A traced app: 1 kHz control loop, worker pool, a lock-order deadlock caught by a watchdog, heap counters |
-| [`static_rings`](examples/static_rings.rs) | The `no_std` API: static rings, explicit producers, idle-loop drain |
-| [`c/examples`](c/examples) | The same from C and C++ |
-| [`stdout_mode`](examples/stdout_mode.rs) | Read logs as text on stdout, like `env_logger`, with binary log calls |
-| [`timing`](examples/timing.rs) | Cost per call in ns and cycles on your machine |
-| [`icount`](examples/icount.rs) | Instructions per call under callgrind, the number CI gates on |
-| [`stripped`](examples/stripped.rs) | A program that ships without its format strings (`strip` feature) |
+| [`basic`](https://github.com/NieWil/rtlog/blob/main/examples/basic.rs) | The flow above with several threads: drain to a file, contract, decode |
+| [`perfetto_quickstart`](https://github.com/NieWil/rtlog/blob/main/examples/perfetto_quickstart.rs) | Threads, spans and counters to a Perfetto trace in about 60 lines |
+| [`app_trace`](https://github.com/NieWil/rtlog/blob/main/examples/app_trace.rs) | A traced app: 1 kHz control loop, worker pool, a lock-order deadlock caught by a watchdog, heap counters |
+| [`static_rings`](https://github.com/NieWil/rtlog/blob/main/examples/static_rings.rs) | The `no_std` API: static rings, explicit producers, idle-loop drain |
+| [`c/examples`](https://github.com/NieWil/rtlog/tree/main/c/examples) | The same from C and C++ |
+| [`stdout_mode`](https://github.com/NieWil/rtlog/blob/main/examples/stdout_mode.rs) | Read logs as text on stdout, like `env_logger`, with binary log calls |
+| [`timing`](https://github.com/NieWil/rtlog/blob/main/examples/timing.rs) | Cost per call in ns and cycles on your machine |
+| [`icount`](https://github.com/NieWil/rtlog/blob/main/examples/icount.rs) | Instructions per call under callgrind, the number CI gates on |
+| [`stripped`](https://github.com/NieWil/rtlog/blob/main/examples/stripped.rs) | A program that ships without its format strings (`strip` feature) |
 
 ## How it works
 
-![Threads write into their own rings; the drain sends frames to the host, which decodes them](docs/images/architecture.svg)
+![Threads write into their own rings; the drain sends frames to the host, which decodes them](https://raw.githubusercontent.com/NieWil/rtlog/main/docs/images/architecture.svg)
 
-Each call site gets an ID at build time; its format string goes into a contract. The program can write the contract itself (`rtlog::contract::write`, any OS), or the host reads it from the binary (`rtlog contract --elf`: ELF on Linux and firmware, Mach-O on macOS, PE on Windows). [Architecture →](docs/architecture.md)
+Each call site gets an ID at build time; its format string goes into a contract. The program can write the contract itself (`rtlog::contract::write`, any OS), or the host reads it from the binary (`rtlog contract --elf`: ELF on Linux and firmware, Mach-O on macOS, PE on Windows). [Architecture →](https://github.com/NieWil/rtlog/blob/main/docs/architecture.md)
 
 The design has four stages, and each has one job:
 
@@ -124,7 +124,7 @@ The design has four stages, and each has one job:
 | --- | --- | --- | --- |
 | Log call | The program, on the calling thread | Writes the site ID, a timestamp and the raw arguments into the thread's ring | Format, allocate, lock, make a system call, wait |
 | Drain | The program, on its own thread or in the idle loop | Sends the frames out: a file, stdout, a UART, RTT; a crash dump when the process dies | Slow down a log call: a full ring drops and counts |
-| Contract | The build | Maps each site ID to its level, file, line and format string; read from the binary or written by the program | Reach the device in a [stripped build](docs/strip.md) |
+| Contract | The build | Maps each site ID to its level, file, line and format string; read from the binary or written by the program | Reach the device in a [stripped build](https://github.com/NieWil/rtlog/blob/main/docs/strip.md) |
 | Decoder and exporters | The host (`rtlog` CLI, `rtlog-decode` library) | Joins frames and contract, then writes the output format | Run on the device |
 
 Every output format is an exporter in the decoder, so adding one costs the program nothing:
@@ -132,27 +132,27 @@ Every output format is an exporter in the decoder, so adding one costs the progr
 | Exporter | State |
 | --- | --- |
 | Text, JSON lines, Perfetto timeline | Built (`rtlog decode --out text\|json\|perfetto`) |
-| syslog (RFC 5424 lines) | Built (`rtlog decode --out syslog`, [guide](docs/syslog.md)) |
-| OpenTelemetry logs (OTLP JSON lines) | Built (`rtlog decode --out otlp-json`, [guide](docs/opentelemetry.md)) |
-| Sending to a syslog daemon or over OTLP/HTTP, journald, spans as OpenTelemetry traces | Planned ([roadmap, section 10](docs/roadmap.md#10-ecosystem-bridges)) |
+| syslog (RFC 5424 lines) | Built (`rtlog decode --out syslog`, [guide](https://github.com/NieWil/rtlog/blob/main/docs/syslog.md)) |
+| OpenTelemetry logs (OTLP JSON lines) | Built (`rtlog decode --out otlp-json`, [guide](https://github.com/NieWil/rtlog/blob/main/docs/opentelemetry.md)) |
+| Sending to a syslog daemon or over OTLP/HTTP, journald, spans as OpenTelemetry traces | Planned ([roadmap, section 10](https://github.com/NieWil/rtlog/blob/main/docs/roadmap.md#10-ecosystem-bridges)) |
 
 ## Guides
 
 | | |
 | --- | --- |
-| [Perfetto tracing](docs/use-cases/perfetto.md) | Follow an application thread by thread, down to the microsecond |
-| [When the process crashes](docs/crash.md) | Panics, segfaults, division by zero, abort: what is kept and what to do |
-| [Embedded Rust](docs/embedded.md) | `no_std` setup, linker snippet, getting the contract from firmware |
-| [C and C++](docs/c-cpp.md) | Header-only producer for Linux, macOS, Windows and bare metal: build, capture, decode |
-| [Zephyr](docs/zephyr.md) | Module, Kconfig, transports |
-| [Send logs to OpenTelemetry](docs/opentelemetry.md) | OTLP JSON log records from a capture, for an OpenTelemetry Collector |
-| [Send logs to syslog](docs/syslog.md) | RFC 5424 lines from a capture, for rsyslog, syslog-ng or a log collector |
-| [Ship without the format strings](docs/strip.md) | Stripped builds: a smaller image with no log text in it, and `rtlog verify` as a release gate |
-| [Configuration and CLI](docs/reference.md) | Levels, environment variables, features, every `rtlog` command and option, the JSON output |
-| [Performance and size](docs/performance.md) | Cycles per call, flash and RAM, measuring on your board |
-| [Results from users' boards](results/README.md) | Timing reports from real hardware; [add yours](CONTRIBUTING.md#share-your-boards-results) |
-| [Demo on your device](docs/demo.md) | Prebuilt per architecture: copy to a board, run one script, open the trace on your computer |
-| [Specification](docs/spec.md) · [Roadmap](docs/roadmap.md) · [Implementation notes](docs/implementation.md) | What is built, what is planned, and where the code deviates |
+| [Perfetto tracing](https://github.com/NieWil/rtlog/blob/main/docs/use-cases/perfetto.md) | Follow an application thread by thread, down to the microsecond |
+| [When the process crashes](https://github.com/NieWil/rtlog/blob/main/docs/crash.md) | Panics, segfaults, division by zero, abort: what is kept and what to do |
+| [Embedded Rust](https://github.com/NieWil/rtlog/blob/main/docs/embedded.md) | `no_std` setup, linker snippet, getting the contract from firmware |
+| [C and C++](https://github.com/NieWil/rtlog/blob/main/docs/c-cpp.md) | Header-only producer for Linux, macOS, Windows and bare metal: build, capture, decode |
+| [Zephyr](https://github.com/NieWil/rtlog/blob/main/docs/zephyr.md) | Module, Kconfig, transports |
+| [Send logs to OpenTelemetry](https://github.com/NieWil/rtlog/blob/main/docs/opentelemetry.md) | OTLP JSON log records from a capture, for an OpenTelemetry Collector |
+| [Send logs to syslog](https://github.com/NieWil/rtlog/blob/main/docs/syslog.md) | RFC 5424 lines from a capture, for rsyslog, syslog-ng or a log collector |
+| [Ship without the format strings](https://github.com/NieWil/rtlog/blob/main/docs/strip.md) | Stripped builds: a smaller image with no log text in it, and `rtlog verify` as a release gate |
+| [Configuration and CLI](https://github.com/NieWil/rtlog/blob/main/docs/reference.md) | Levels, environment variables, features, every `rtlog` command and option, the JSON output |
+| [Performance and size](https://github.com/NieWil/rtlog/blob/main/docs/performance.md) | Cycles per call, flash and RAM, measuring on your board |
+| [Results from users' boards](https://github.com/NieWil/rtlog/blob/main/results/README.md) | Timing reports from real hardware; [add yours](https://github.com/NieWil/rtlog/blob/main/CONTRIBUTING.md#share-your-boards-results) |
+| [Demo on your device](https://github.com/NieWil/rtlog/blob/main/docs/demo.md) | Prebuilt per architecture: copy to a board, run one script, open the trace on your computer |
+| [Specification](https://github.com/NieWil/rtlog/blob/main/docs/spec.md) · [Roadmap](https://github.com/NieWil/rtlog/blob/main/docs/roadmap.md) · [Implementation notes](https://github.com/NieWil/rtlog/blob/main/docs/implementation.md) | What is built, what is planned, and where the code deviates |
 
 ## Get it
 
@@ -164,17 +164,17 @@ Every output format is an exporter in the decoder, so adding one costs the progr
   sudo apt install ./rtlog-dev_<version>-1_all.deb    # rtlog.h for C/C++, with pkg-config
   ```
 
-- **Other Linux distributions**: no package in a distribution's own repository yet. The static CLI from the releases page runs on any of them; packages you can add as a repository (AUR, PPA, COPR, a Yocto layer) are [planned](docs/roadmap.md#12-adoption-a-representative-application-and-being-easy-to-find-and-try).
+- **Other Linux distributions**: no package in a distribution's own repository yet. The static CLI from the releases page runs on any of them; packages you can add as a repository (AUR, PPA, COPR, a Yocto layer) are [planned](https://github.com/NieWil/rtlog/blob/main/docs/roadmap.md#12-adoption-a-representative-application-and-being-easy-to-find-and-try).
 - **Rust**: `cargo add rtlog` (for bare metal: `cargo add rtlog --no-default-features`).
-- **Demo**: `rtlog-demo-<version>-<target>` on the releases page runs the timing report and a traced app on any of those machines. [How →](docs/demo.md)
-- **C / C++ / Zephyr**: the `rtlog-c` package on the releases page, or [`c/include/rtlog.h`](c/include/rtlog.h) and the [Zephyr module](docs/zephyr.md).
+- **Demo**: `rtlog-demo-<version>-<target>` on the releases page runs the timing report and a traced app on any of those machines. [How →](https://github.com/NieWil/rtlog/blob/main/docs/demo.md)
+- **C / C++ / Zephyr**: the `rtlog-c` package on the releases page, or [`c/include/rtlog.h`](https://github.com/NieWil/rtlog/blob/main/c/include/rtlog.h) and the [Zephyr module](https://github.com/NieWil/rtlog/blob/main/docs/zephyr.md).
 
 ## Status
 
-v0.2 preview. Every CI run tests Rust, C and C++ on Linux, macOS and Windows, Rust on arm64, ARMv7, RISC-V and x86 under QEMU, and the Zephyr module on an emulated Cortex-M3. Each run also includes a 2-minute soak test, Miri, and Thread and Address sanitizers. Not yet there: `derive(Log)`, the `log` / `tracing` / `defmt` bridges and per-module levels. [Roadmap →](docs/roadmap.md)
+v0.2 preview. Every CI run tests Rust, C and C++ on Linux, macOS and Windows, Rust on arm64, ARMv7, RISC-V and x86 under QEMU, and the Zephyr module on an emulated Cortex-M3. Each run also includes a 2-minute soak test, Miri, and Thread and Address sanitizers. Not yet there: `derive(Log)`, the `log` / `tracing` / `defmt` bridges and per-module levels. [Roadmap →](https://github.com/NieWil/rtlog/blob/main/docs/roadmap.md)
 
 ## Licence
 
-Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT licence](LICENSE-MIT), at your option.
+Licensed under either of [Apache License, Version 2.0](https://github.com/NieWil/rtlog/blob/main/LICENSE-APACHE) or [MIT licence](https://github.com/NieWil/rtlog/blob/main/LICENSE-MIT), at your option.
 
 Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in rtlog by you, as defined in the Apache-2.0 licence, shall be dual licensed as above, without any additional terms or conditions.
