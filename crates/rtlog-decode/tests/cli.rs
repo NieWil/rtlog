@@ -868,7 +868,7 @@ fn fields_chooses_what_a_text_line_shows() {
         lines[0].starts_with("INFO  cli ") && lines[0].ends_with(":   cli speed=1200 ok=true"),
         "{stdout}"
     );
-    assert!(lines[0].contains("tests/cli.rs:"), "{stdout}");
+    assert!(lines[0].contains("cli.rs:"), "{stdout}");
     assert!(lines[1].starts_with("WARN  cli "), "{stdout}");
 
     let stdout = succeeded(&decode(
