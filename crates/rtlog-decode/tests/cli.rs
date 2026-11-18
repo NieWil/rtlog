@@ -911,6 +911,10 @@ fn cli_sends_journal_entries_to_a_socket() {
     let (contract, stream) = dir.contract_and_stream();
     let socket = dir.0.join("journal.socket");
     let server = std::os::unix::net::UnixDatagram::bind(&socket).unwrap();
+    // A datagram that never arrives fails the test instead of hanging it.
+    server
+        .set_read_timeout(Some(std::time::Duration::from_secs(20)))
+        .unwrap();
 
     let out = decode(
         &contract,

@@ -519,6 +519,10 @@ mod tests {
         let path = dir.join("socket");
         let _ = std::fs::remove_file(&path);
         let server = std::os::unix::net::UnixDatagram::bind(&path).unwrap();
+        // A datagram that never arrives fails the test instead of hanging it.
+        server
+            .set_read_timeout(Some(std::time::Duration::from_secs(20)))
+            .unwrap();
         let export =
             "__REALTIME_TIMESTAMP=1\nMESSAGE=one\nPRIORITY=6\n\nMESSAGE=two\nPRIORITY=4\n\n";
         assert_eq!(send(export, &path).unwrap(), 2);
