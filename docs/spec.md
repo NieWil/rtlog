@@ -333,7 +333,7 @@ MCU crash capture (exception frame into flash or `.noinit`) is on the roadmap.
 
 ## 9. Host decoder
 
-The decoder (`rtlog-decode`, a library plus the `rtlog` CLI) turns a stream and a contract into text, JSON lines, a Perfetto trace, syslog lines or OpenTelemetry log records, frame by frame.
+The decoder (`rtlog-decode`, a library plus the `rtlog` CLI) turns a stream and a contract into text, JSON lines, a Perfetto trace, syslog lines, OpenTelemetry log records or systemd journal entries, frame by frame.
 
 **Pipeline**
 
@@ -350,14 +350,15 @@ The decoder (`rtlog-decode`, a library plus the `rtlog` CLI) turns a stream and 
 | JSON lines | `--json` | one object per record, with `type` (`log`, `span`, `dropped`, `gap`, `crash`); a `log` record has `ts_ns`, `ctx`, `ctx_name`, `level`, `site`, `module`, `file`, `line`, `message`, `args` ([all fields](reference.md#json-lines-output)) |
 | Perfetto / Chrome trace | `--perfetto` | contexts to tracks, spans to slices, records to instant events, crashes to markers; opens in ui.perfetto.dev |
 | OpenTelemetry logs | `--out otlp-json` | one OTLP JSON object (`LogsData`) per line with up to 1000 log records: severity number and text from the level, the message as body, call site, context, format string and typed arguments as attributes ([guide](opentelemetry.md)) |
+| systemd journal | `--out journald`, `--journald-socket <path>` | one journal entry per record, finished span, drop report, gap and crash, in the Journal Export Format (for `systemd-journal-remote`) or sent to `systemd-journald` on its native socket: `MESSAGE`, `PRIORITY`, `SYSLOG_IDENTIFIER`, `CODE_FILE`, `CODE_LINE` and `RTLOG_*` fields ([guide](journald.md)) |
 | Syslog | `--out syslog` | one RFC 5424 line per record, finished span, drop report, gap and crash; severity from the level, the context name as process ID, the site ID as message ID, and level, file, line, module and target time as structured data ([guide](syslog.md)) |
 | Frame by frame | library (`stream::Session::decode_frame`) | for in-process consumers such as the stdout mode |
 
 ## 10. Integration with open logging ecosystems
 
-Implemented today: the Perfetto / Chrome trace output (section 9), which also opens in Speedscope and `chrome://tracing`, JSON lines for any log pipeline, RFC 5424 syslog lines (`--out syslog`) and OpenTelemetry log records as OTLP JSON lines (`--out otlp-json`). The span model shared by every output is `span_open{id, parent, site}` and `span_close{id}` with 64-bit IDs (high 32 bits = context, low 32 = counter) and the parent carried explicitly, so nesting survives.
+Implemented today: the Perfetto / Chrome trace output (section 9), which also opens in Speedscope and `chrome://tracing`, JSON lines for any log pipeline, RFC 5424 syslog lines (`--out syslog`) OpenTelemetry log records as OTLP JSON lines (`--out otlp-json`) and systemd journal entries (`--out journald`, `--journald-socket`). The span model shared by every output is `span_open{id, parent, site}` and `span_close{id}` with 64-bit IDs (high 32 bits = context, low 32 = counter) and the parent carried explicitly, so nesting survives.
 
-Backends for the `log`, `tracing` and `defmt` facades, sending syslog lines to a daemon, OTLP over HTTP and spans as OpenTelemetry traces, and outputs for journald, CTF and SystemView, are on the roadmap.
+Backends for the `log`, `tracing` and `defmt` facades, sending syslog lines to a daemon, OTLP over HTTP and spans as OpenTelemetry traces, and outputs for CTF and SystemView, are on the roadmap.
 
 ## 10b. Threat model
 

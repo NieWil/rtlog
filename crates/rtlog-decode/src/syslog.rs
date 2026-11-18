@@ -403,7 +403,14 @@ pub fn decode(
         output: crate::Output::Syslog,
         ..*opts
     };
-    crate::decode_inner(contract, bytes, &opts, cfg, &crate::otlp::Config::default())
+    crate::decode_inner(
+        contract,
+        bytes,
+        &opts,
+        cfg,
+        &crate::otlp::Config::default(),
+        &crate::journald::Config::default(),
+    )
 }
 
 #[cfg(test)]

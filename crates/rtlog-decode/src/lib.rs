@@ -6,6 +6,8 @@
 //!   event by event. After a damaged frame decoding resumes at the next resync
 //!   frame and the gap is reported.
 //! - [`syslog`]: RFC 5424 lines for a syslog daemon or a log collector.
+//! - [`journald`]: systemd journal entries, for `systemd-journal-remote` or
+//!   a running journal.
 //! - [`otlp`]: OpenTelemetry log records (OTLP JSON) for a collector.
 //! - [`stdout::init`]: text on stdout while the program runs, like `env_logger`.
 //! - [`elf::contract_from_binary`]: the contract from an ELF, Mach-O or PE
@@ -32,6 +34,7 @@
 
 pub mod contract;
 pub mod elf;
+pub mod journald;
 pub mod otlp;
 mod perfetto;
 pub mod render;
@@ -60,6 +63,8 @@ pub enum Output {
     Syslog,
     /// OpenTelemetry log records, OTLP JSON lines; see [`otlp`].
     OtlpJson,
+    /// systemd journal entries in the Journal Export Format; see [`journald`].
+    Journald,
 }
 
 /// What a text line shows before the message, for [`Options::fields`] and
@@ -555,16 +560,18 @@ pub fn decode_with(
         opts,
         &syslog::Config::default(),
         &otlp::Config::default(),
+        &journald::Config::default(),
     )
 }
 
-/// [`decode_with`], with the settings of the syslog and OTLP outputs.
+/// [`decode_with`], with the settings of the syslog, OTLP and journald outputs.
 pub(crate) fn decode_inner(
     contract: &Contract,
     bytes: &[u8],
     opts: &Options,
     syslog: &syslog::Config,
     otlp: &otlp::Config,
+    journald: &journald::Config,
 ) -> Result<Decoded, DecodeError> {
     let mut dec = Decoder::new(contract, bytes, opts.force)?;
     let mismatched = dec.mismatched;
@@ -671,6 +678,9 @@ pub(crate) fn decode_inner(
     match opts.output {
         Output::Perfetto => result.text = perfetto::export(&items, &names, clock_hz),
         Output::OtlpJson => result.text = otlp::export(&items, &names, mismatched, otlp),
+        Output::Journald => {
+            result.text = journald::export(&items, &names, mismatched, opts.spans, journald)
+        }
         Output::Syslog => {
             result.text = syslog::export(&items, &names, mismatched, opts.spans, syslog)
         }

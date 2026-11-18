@@ -158,6 +158,40 @@ def check_usability():
             url = m.group(1)
             if not url.startswith(("http://", "https://", "mailto:")) and not (md.parent / url).resolve().exists():
                 fail("usability", f"{md.relative_to(ROOT)}: broken link {url}")
+    # The README is also the page of both crates on crates.io, which resolves a
+    # relative link against the crate's directory (crates/rtlog/docs/...): a
+    # dead link. So its links into the repository are absolute, and checked
+    # here against the files and headings of this checkout.
+    readme = (ROOT / "README.md").read_text()
+    for m in re.finditer(r"\]\(([^)\s]+)\)", readme):
+        url = m.group(1)
+        if not url.startswith(("http://", "https://", "mailto:", "#")):
+            fail("usability", f"README.md: relative link {url} (dead on crates.io); use {REPO_URL}/blob/main/{url}")
+        for prefix in (f"{REPO_URL}/blob/main/", f"{REPO_URL}/tree/main/", f"{REPO_RAW}/main/"):
+            if not url.startswith(prefix):
+                continue
+            path, _, anchor = url[len(prefix):].partition("#")
+            target = ROOT / path
+            if not target.exists():
+                fail("usability", f"README.md: {url} points to no file in the repository")
+            elif anchor and target.suffix == ".md" and anchor not in heading_anchors(target):
+                fail("usability", f"README.md: {url} points to no heading of {path}")
+
+
+REPO_URL = "https://github.com/NieWil/rtlog"
+REPO_RAW = "https://raw.githubusercontent.com/NieWil/rtlog"
+
+
+def heading_anchors(md):
+    """The anchors GitHub gives the headings of a Markdown file."""
+    anchors, in_code = set(), False
+    for line in md.read_text().splitlines():
+        if line.startswith("```"):
+            in_code = not in_code
+        elif not in_code and line.startswith("#"):
+            text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", line.lstrip("#").strip().lower())
+            anchors.add(re.sub(r"[^\w\- ]", "", re.sub(r"[`*]", "", text)).replace(" ", "-"))
+    return anchors
 
 
 def spec_budgets():
